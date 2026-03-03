@@ -85,22 +85,14 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	// Load input configs
 	g_cfg_input_configs.load();
 
-	if (m_title_id.empty())
-	{
-		const auto [config_files, active_config_file] = get_config_files();
+	const auto [config_files, active_config_file] = get_config_files();
 
-		for (const QString& profile : config_files)
-		{
-			ui->chooseConfig->addItem(profile);
-		}
-
-		ui->chooseConfig->setCurrentText(active_config_file);
-	}
-	else
+	for (const QString& profile : config_files)
 	{
-		ui->chooseConfig->addItem(QString::fromStdString(m_title_id));
-		ui->gb_config_files->setEnabled(false);
+		ui->chooseConfig->addItem(profile);
 	}
+
+	ui->chooseConfig->setCurrentText(active_config_file);
 
 	// Create tab widget for 7 players
 	for (int i = 1; i < 8; i++)
@@ -271,7 +263,8 @@ std::pair<QStringList, QString> pad_settings_dialog::get_config_files()
 {
 	const QString input_config_dir = QString::fromStdString(rpcs3::utils::get_input_config_dir(m_title_id));
 	QStringList config_files = gui::utils::get_dir_entries(QDir(input_config_dir), QStringList() << "*.yml");
-	QString active_config_file = QString::fromStdString(g_cfg_input_configs.active_configs.get_value(g_cfg_input_configs.global_key));
+	const std::string config_file_key = m_title_id.empty() ? g_cfg_input_configs.global_key : m_title_id;
+	QString active_config_file = QString::fromStdString(g_cfg_input_configs.active_configs.get_value(config_file_key));
 
 	if (!config_files.contains(active_config_file))
 	{
@@ -1654,7 +1647,7 @@ void pad_settings_dialog::ChangeConfig(const QString& config_file)
 
 	m_config_file = config_file.toStdString();
 
-	ui->b_remConfig->setEnabled(m_title_id.empty() && m_config_file != g_cfg_input_configs.default_config);
+	ui->b_remConfig->setEnabled(m_config_file != g_cfg_input_configs.default_config);
 
 	// Load in order to get the pad handlers
 	if (!g_cfg_input.load(m_title_id, m_config_file, true))
