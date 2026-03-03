@@ -4685,7 +4685,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// Subject to change
 	constexpr u32 c_moudles_per_jit = 100;
 	constexpr std::string_view s_ppu_obj_name_version = "v8-kusa";
-	constexpr std::string_view s_ppu_manifest_format_version = "ppu-obj-v1";
+	constexpr std::string_view s_ppu_manifest_format_version = "ppu-obj-v2";
 
 	auto get_ppu_cache_compatibility_tuple = []()
 	{
@@ -5340,7 +5340,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), "obj"); !cas.empty())
 						{
 							rpcs3::cache::append_manifest_record_atomic(cache_path + "manifest.index",
-								rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
+								rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot));
 						}
 					}
 

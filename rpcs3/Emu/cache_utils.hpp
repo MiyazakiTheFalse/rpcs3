@@ -34,6 +34,8 @@ namespace rpcs3::cache
 		std::string metadata;
 		std::string compatibility_tuple;
 		std::string format_version;
+		std::string codec;
+		std::string tier;
 	};
 
 	std::string get_ppu_cache();
@@ -46,8 +48,8 @@ namespace rpcs3::cache
 	bool write_text_file_atomic(const std::string& path, std::string_view text);
 	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal = true);
 	bool get_from_cas(const std::string& hash_key, std::vector<uchar>& out);
-	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {});
+	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_codec codec = cas_codec::auto_select, cas_cache_tier tier = cas_cache_tier::auto_select);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);
-	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version);
+	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec = cas_codec::auto_select, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	void limit_cache_size();
 }

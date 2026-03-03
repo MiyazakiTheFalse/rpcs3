@@ -236,7 +236,7 @@ namespace rsx
 			: version_prefix(std::move(version_prefix_str))
 			, pipeline_class_name(std::move(pipeline_class))
 			, compatibility_tuple(rpcs3::cache::make_compatibility_tuple("rsx", pipeline_class_name))
-			, raw_program_format_version("rsx-raw-program-v1")
+			, raw_program_format_version("rsx-raw-program-v2")
 			, m_storage(storage)
 		{
 			if (!g_cfg.video.disable_on_disk_shader_cache)
@@ -334,13 +334,13 @@ namespace rsx
 			if (!fp_cas.empty())
 			{
 				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
-				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_codec::zstd, rpcs3::cache::cas_cache_tier::warm));
 			}
 
 			if (!vp_cas.empty())
 			{
 				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
-				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_codec::zstd, rpcs3::cache::cas_cache_tier::warm));
 			}
 
 			const u32 state_params[] =
@@ -385,7 +385,9 @@ namespace rsx
 				return vp;
 			}
 			rpcs3::cache::manifest_record idx_rec;
-			if (!rpcs3::cache::parse_manifest_record(rec, idx_rec) || !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, raw_program_format_version))
+			if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
+				|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_codec::zstd, rpcs3::cache::cas_cache_tier::warm)
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, "rsx-raw-program-v1")))
 			{
 				return vp;
 			}
@@ -418,7 +420,8 @@ namespace rsx
 				}
 				rpcs3::cache::manifest_record idx_rec;
 				if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
-					|| !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, raw_program_format_version)
+					|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_codec::zstd, rpcs3::cache::cas_cache_tier::warm)
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, "rsx-raw-program-v1"))
 					|| !rpcs3::cache::get_from_cas(idx_rec.hash_key, cas_bytes))
 				{
 					return fp;
