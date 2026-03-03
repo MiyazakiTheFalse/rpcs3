@@ -80,6 +80,7 @@ Writers must record the intended artifact placement policy (`tier`) and the effe
 - **SPU cache blob manifest entries**: `spu-bin-v3` (fallback accepted: `spu-bin-v2`)
 - **PPU object manifest entries**: `ppu-obj-v2`
 - **RSX raw program index entries**: `rsx-raw-program-v2` (fallback accepted: `rsx-raw-program-v1`)
+- **RSX pipeline index entries**: `rsx-pipeline-v1` (CAS-first indirection to `pipeline_data` blobs)
 - **RSX pipeline binary payload**: `serialization_version = 1` in `pipeline_data` + computed namespace from `rsx::get_pipeline_cache_namespace()` (`fmt<serialization>.state<packed-state-schema>.prec<shader_precision>`).
 
 
@@ -121,11 +122,13 @@ Current mapping:
 - `ppu_object_blob` -> manifest artifact `ppu_obj` -> default tier `hot` -> codec inferred as `LZ4`
 - `rsx_raw_fp_blob` -> manifest artifact `fp` -> default tier `warm` -> codec inferred as `Zstd`
 - `rsx_raw_vp_blob` -> manifest artifact `vp` -> default tier `warm` -> codec inferred as `Zstd`
+- `rsx_pipeline_blob` -> manifest artifact `rsx_pipeline` -> default tier `hot` -> codec inferred as `LZ4`
 
 Rationale:
 
 - SPU function blobs and PPU object blobs are frequently re-read on preload/hot startup paths, so they default to `hot` for faster decode (`LZ4`).
 - RSX raw FP/VP blobs are more archival/rebuild-oriented and less latency sensitive per access, so they default to `warm` (`Zstd`) for better space efficiency.
+- RSX pipeline blobs are loaded in startup hot paths, so they default to `hot` (`LZ4`) while still being stored as CAS blobs with index indirection.
 
 ## CAS telemetry for tuning
 

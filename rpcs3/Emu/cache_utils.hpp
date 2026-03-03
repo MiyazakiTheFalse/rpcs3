@@ -39,6 +39,7 @@ namespace rpcs3::cache
 		ppu_object_blob = 2,
 		rsx_raw_fp_blob = 3,
 		rsx_raw_vp_blob = 4,
+		rsx_pipeline_blob = 5,
 	};
 
 	struct manifest_record
