@@ -75,5 +75,6 @@ namespace rpcs3::cache
 	bool is_manifest_record_compatible(const manifest_record& rec, cas_artifact_type expected_artifact, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec = cas_codec::auto_select, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	void record_catalog_reference(std::string_view family, std::string_view artifact_type, std::string_view hash_key, std::string_view compatibility_tuple, std::string_view format_version, std::string_view settings_fingerprint, std::string_view gpu_fingerprint = {});
+	void run_policy_gc();
 	void limit_cache_size();
 }

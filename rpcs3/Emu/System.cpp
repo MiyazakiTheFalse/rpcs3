@@ -714,7 +714,7 @@ void Emulator::Init()
 	// Limit cache size
 	if (g_cfg.vfs.limit_cache_size)
 	{
-		rpcs3::cache::limit_cache_size();
+		rpcs3::cache::run_policy_gc();
 	}
 
 	// Wipe clean VSH's temporary directory of choice

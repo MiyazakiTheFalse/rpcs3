@@ -14,7 +14,9 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <unordered_map>
+#include <unordered_set>
 #include <zstd.h>
 
 #if __has_include(<lz4.h>)
@@ -940,7 +942,7 @@ namespace rpcs3::cache
 		if (!has_existing || existing.empty())
 		{
 			const std::string text = fmt::format(
-				"{\n  \"title_id\": \"%s\",\n  \"app_version\": \"%s\",\n  \"build_id\": \"%s\",\n  \"emu_cache_schema\": %u,\n  \"settings_fingerprint\": \"%s\",\n  \"gpu_fingerprint\": \"%s\",\n  \"entries\": [%s\n  ]\n}\n",
+				"{\n  \"title_id\": \"%s\",\n  \"app_version\": \"%s\",\n  \"build_id\": \"%s\",\n  \"emu_cache_schema\": %u,\n  \"pinned\": false,\n  \"settings_fingerprint\": \"%s\",\n  \"gpu_fingerprint\": \"%s\",\n  \"entries\": [%s\n  ]\n}\n",
 				escape_json_string(title_id), escape_json_string(app_version), escaped_build, emu_cache_schema_version, escaped_cfg, escaped_gpu, new_entry);
 			write_text_file_atomic(path, text);
 			return;
@@ -963,87 +965,322 @@ namespace rpcs3::cache
 		write_text_file_atomic(path, updated);
 	}
 
+	struct gc_run_info
+	{
+		std::string path;
+		std::string title_id;
+		std::string name;
+		u64 timestamp = 0;
+		bool pinned = false;
+		bool retained = false;
+		std::vector<std::string> hashes;
+	};
+
+	namespace
+	{
+		inline constexpr usz s_default_recent_runs_per_title = 5;
+
+		std::string extract_json_string(std::string_view text, std::string_view key)
+		{
+			const std::regex re(fmt::format("\"%s\"\\s*:\\s*\"([^\"]*)\"", key));
+			const std::string input(text);
+			std::smatch match{};
+			if (std::regex_search(input, match, re) && match.size() > 1)
+			{
+				return match[1].str();
+			}
+
+			return {};
+		}
+
+		bool extract_json_bool(std::string_view text, std::string_view key)
+		{
+			const std::regex re(fmt::format("\"%s\"\\s*:\\s*(true|false)", key));
+			const std::string input(text);
+			std::smatch match{};
+			if (std::regex_search(input, match, re) && match.size() > 1)
+			{
+				return match[1].str() == "true";
+			}
+
+			return false;
+		}
+
+		std::vector<std::string> extract_entry_hashes(std::string_view text)
+		{
+			std::vector<std::string> hashes;
+			const std::regex re("\"hash\"\\s*:\\s*\"([0-9a-fA-F]{40})\"");
+			const std::string input(text);
+			for (std::sregex_iterator it(input.begin(), input.end(), re), end_it; it != end_it; ++it)
+			{
+				hashes.emplace_back((*it)[1].str());
+			}
+
+			return hashes;
+		}
+
+		std::vector<gc_run_info> scan_catalog_runs()
+		{
+			std::vector<gc_run_info> runs;
+			const std::string catalog_root = rpcs3::utils::get_cache_dir() + "catalog/";
+			if (!fs::is_dir(catalog_root))
+			{
+				return runs;
+			}
+
+			for (const auto& title_dir : fs::dir(catalog_root))
+			{
+				if (!title_dir.is_directory || title_dir.name == "." || title_dir.name == "..")
+				{
+					continue;
+				}
+
+				const std::string runs_dir = catalog_root + title_dir.name + "/runs/";
+				if (!fs::is_dir(runs_dir))
+				{
+					continue;
+				}
+
+				for (const auto& run_file : fs::dir(runs_dir))
+				{
+					if (run_file.is_directory || run_file.name == "." || run_file.name == ".." || !run_file.name.ends_with(".json"))
+					{
+						continue;
+					}
+
+					std::string content;
+					const std::string full_path = runs_dir + run_file.name;
+					if (!fs::read_file(full_path, content))
+					{
+						continue;
+					}
+
+					gc_run_info run{};
+					run.path = full_path;
+					run.name = run_file.name;
+					run.timestamp = run_file.mtime;
+					run.title_id = extract_json_string(content, "title_id");
+					if (run.title_id.empty())
+					{
+						run.title_id = title_dir.name;
+					}
+					run.pinned = extract_json_bool(content, "pinned");
+					run.hashes = extract_entry_hashes(content);
+					runs.emplace_back(std::move(run));
+				}
+			}
+
+			return runs;
+		}
+
+		struct cas_blob_info
+		{
+			std::string key;
+			std::string path;
+			u64 size = 0;
+		};
+
+		std::vector<cas_blob_info> scan_cas_blobs()
+		{
+			std::vector<cas_blob_info> blobs;
+			const std::string cas_root = get_shared_cas_root();
+			if (cas_root.empty() || !fs::is_dir(cas_root))
+			{
+				return blobs;
+			}
+
+			auto scan_dir = [&blobs](const std::string& base_path)
+			{
+				for (const auto& entry : fs::dir(base_path))
+				{
+					if (entry.name == "." || entry.name == ".." || entry.is_directory)
+					{
+						continue;
+					}
+
+					blobs.push_back({entry.name, base_path + entry.name, entry.size});
+				}
+			};
+
+			for (const auto& entry : fs::dir(cas_root))
+			{
+				if (entry.name == "." || entry.name == "..")
+				{
+					continue;
+				}
+
+				if (entry.is_directory)
+				{
+					scan_dir(cas_root + entry.name + "/");
+				}
+				else
+				{
+					blobs.push_back({entry.name, cas_root + entry.name, entry.size});
+				}
+			}
+
+			return blobs;
+		}
+	}
+
+	void run_policy_gc()
+	{
+		auto runs = scan_catalog_runs();
+		std::unordered_map<std::string, std::vector<usz>> runs_by_title;
+		for (usz i = 0; i < runs.size(); ++i)
+		{
+			runs_by_title[runs[i].title_id].push_back(i);
+		}
+
+		u64 retained_pinned = 0;
+		u64 retained_recent = 0;
+		for (auto& title_runs : runs_by_title)
+		{
+			auto& indices = title_runs.second;
+			std::sort(indices.begin(), indices.end(), [&](usz a, usz b)
+			{
+				if (runs[a].timestamp != runs[b].timestamp)
+				{
+					return runs[a].timestamp > runs[b].timestamp;
+				}
+				return runs[a].name > runs[b].name;
+			});
+
+			usz kept_recent = 0;
+			for (const usz idx : indices)
+			{
+				if (runs[idx].pinned)
+				{
+					runs[idx].retained = true;
+					retained_pinned++;
+					continue;
+				}
+
+				if (kept_recent < s_default_recent_runs_per_title)
+				{
+					runs[idx].retained = true;
+					retained_recent++;
+					kept_recent++;
+				}
+			}
+		}
+
+		auto build_reachable = [&runs]()
+		{
+			std::unordered_set<std::string> reachable_hashes;
+			for (const auto& run : runs)
+			{
+				if (!run.retained)
+				{
+					continue;
+				}
+
+				for (const auto& hash : run.hashes)
+				{
+					reachable_hashes.emplace(hash);
+				}
+			}
+			return reachable_hashes;
+		};
+
+		auto blobs = scan_cas_blobs();
+		u64 blobs_removed = 0;
+		u64 bytes_reclaimed = 0;
+
+		auto delete_orphans = [&](const std::unordered_set<std::string>& reachable_hashes)
+		{
+			for (auto& blob : blobs)
+			{
+				if (blob.path.empty() || reachable_hashes.contains(blob.key))
+				{
+					continue;
+				}
+
+				if (fs::remove_file(blob.path))
+				{
+					blobs_removed++;
+					bytes_reclaimed += blob.size;
+					blob.path.clear();
+				}
+			}
+		};
+
+		auto reachable_hashes = build_reachable();
+		delete_orphans(reachable_hashes);
+
+		const std::string cache_location = rpcs3::utils::get_hdd1_dir() + "/caches";
+		const u64 max_size = static_cast<u64>(g_cfg.vfs.cache_max_size) * 1024 * 1024;
+		if (max_size == 0)
+		{
+			if (fs::is_dir(cache_location))
+			{
+				fs::remove_all(cache_location, false);
+			}
+		}
+		else if (fs::is_dir(cache_location))
+		{
+			u64 cur_size = fs::get_dir_size(cache_location);
+			if (cur_size != umax && cur_size > max_size)
+			{
+				std::vector<usz> evictable;
+				for (usz i = 0; i < runs.size(); ++i)
+				{
+					if (runs[i].retained && !runs[i].pinned)
+					{
+						evictable.push_back(i);
+					}
+				}
+
+				std::sort(evictable.begin(), evictable.end(), [&](usz a, usz b)
+				{
+					if (runs[a].timestamp != runs[b].timestamp)
+					{
+						return runs[a].timestamp < runs[b].timestamp;
+					}
+					return runs[a].name < runs[b].name;
+				});
+
+				for (const usz idx : evictable)
+				{
+					if (cur_size <= max_size)
+					{
+						break;
+					}
+
+					runs[idx].retained = false;
+					fs::remove_file(runs[idx].path);
+
+					reachable_hashes = build_reachable();
+					delete_orphans(reachable_hashes);
+
+					cur_size = fs::get_dir_size(cache_location);
+					if (cur_size == umax)
+					{
+						break;
+					}
+				}
+			}
+		}
+
+		u64 retained_total = 0;
+		for (const auto& run : runs)
+		{
+			retained_total += run.retained ? 1 : 0;
+		}
+
+		sys_log.notice("Cache GC summary: runs_scanned=%u runs_retained=%u retained_pinned=%u retained_recent=%u reachable_hashes=%u blobs_removed=%u bytes_reclaimed=%u",
+			static_cast<u32>(runs.size()),
+			static_cast<u32>(retained_total),
+			static_cast<u32>(retained_pinned),
+			static_cast<u32>(retained_recent),
+			static_cast<u32>(reachable_hashes.size()),
+			static_cast<u32>(blobs_removed),
+			bytes_reclaimed);
+	}
+
 	void limit_cache_size()
 	{
-		const std::string cache_location = rpcs3::utils::get_hdd1_dir() + "/caches";
-
-		if (!fs::is_dir(cache_location))
-		{
-			sys_log.warning("Cache does not exist (%s)", cache_location);
-			return;
-		}
-
-		const u64 size = fs::get_dir_size(cache_location);
-
-		if (size == umax)
-		{
-			sys_log.error("Could not calculate cache directory '%s' size (%s)", cache_location, fs::g_tls_error);
-			return;
-		}
-
-		const u64 max_size = static_cast<u64>(g_cfg.vfs.cache_max_size) * 1024 * 1024;
-
-		if (max_size == 0) // Everything must go, so no need to do checks
-		{
-			fs::remove_all(cache_location, false);
-			sys_log.success("Cleared disk cache");
-			return;
-		}
-
-		if (size <= max_size)
-		{
-			sys_log.trace("Cache size below limit: %llu/%llu", size, max_size);
-			return;
-		}
-
-		sys_log.success("Cleaning disk cache...");
-		std::vector<fs::dir_entry> file_list{};
-		fs::dir cache_dir(cache_location);
-		if (!cache_dir)
-		{
-			sys_log.error("Could not open cache directory '%s' (%s)", cache_location, fs::g_tls_error);
-			return;
-		}
-
-		// retrieve items to delete
-		for (const auto &item : cache_dir)
-		{
-			if (item.name != "." && item.name != "..")
-				file_list.push_back(item);
-		}
-
-		cache_dir.close();
-
-		// sort oldest first
-		std::sort(file_list.begin(), file_list.end(), FN(x.mtime < y.mtime));
-
-		// keep removing until cache is empty or enough bytes have been cleared
-		// cache is cleared down to 80% of limit to increase interval between clears
-		const u64 to_remove = static_cast<u64>(size - max_size * 0.8);
-		u64 removed = 0;
-		for (const auto &item : file_list)
-		{
-			const std::string &name = cache_location + "/" + item.name;
-			const bool is_dir = fs::is_dir(name);
-			const u64 item_size = is_dir ? fs::get_dir_size(name) : item.size;
-
-			if (is_dir && item_size == umax)
-			{
-				sys_log.error("Failed to calculate '%s' item '%s' size (%s)", cache_location, item.name, fs::g_tls_error);
-				break;
-			}
-
-			if (is_dir ? !fs::remove_all(name, true, true) : !fs::remove_file(name))
-			{
-				sys_log.error("Could not remove cache directory '%s' item '%s' (%s)", cache_location, item.name, fs::g_tls_error);
-				break;
-			}
-
-			removed += item_size;
-			if (removed >= to_remove)
-				break;
-		}
-
-		sys_log.success("Cleaned disk cache, removed %.2f MB", size / 1024.0 / 1024.0);
+		run_policy_gc();
 	}
+
 }
