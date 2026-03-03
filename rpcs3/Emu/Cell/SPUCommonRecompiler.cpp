@@ -611,6 +611,19 @@ static u16 calculate_crc16(const uchar* data, usz length)
 	return crc;
 }
 
+static std::string get_spu_cache_filename()
+{
+	return "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v2-tane.dat";
+}
+
+static std::string get_spu_cache_compatibility_tuple()
+{
+	const std::string backend_id = fmt::format("llvm-cpu=%s-precomp=%u", jit_compiler::cpu(g_cfg.core.llvm_cpu), g_cfg.core.llvm_precompilation ? 1u : 0u);
+	return rpcs3::cache::make_compatibility_tuple("spu", backend_id);
+}
+
+static constexpr std::string_view s_spu_manifest_format_version = "spu-bin-v2";
+
 std::deque<spu_program> spu_cache::get()
 {
 	std::deque<spu_program> result;
@@ -707,9 +720,9 @@ void spu_cache::add(const spu_program& func)
 	{
 		if (const std::string ppu_cache = rpcs3::cache::get_ppu_cache(); !ppu_cache.empty())
 		{
-			const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v1-tane.dat";
+			const std::string filename = get_spu_cache_filename();
 			fs::file mf(ppu_cache + filename + ".manifest", fs::append + fs::create + fs::write);
-			mf.write(rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point)));
+			mf.write(rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
 		}
 	}
 }
@@ -734,10 +747,11 @@ void spu_cache::initialize(bool build_existing_cache)
 	}
 
 	// SPU cache file (version + block size type)
-	const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v1-tane.dat";
+	const std::string filename = get_spu_cache_filename();
 	const std::string loc = ppu_cache + filename;
 	const std::string manifest_loc = ppu_cache + filename + ".manifest";
 	const std::string loc_debug = fs::get_cache_dir() + "DEBUG/" + filename;
+	const std::string expected_compatibility_tuple = get_spu_cache_compatibility_tuple();
 
 	bool is_debug = false;
 
@@ -762,15 +776,19 @@ void spu_cache::initialize(bool build_existing_cache)
 	{
 		for (std::string line; mf.read_line(line);)
 		{
-			const usz p0 = line.find('|');
-			const usz p1 = line.find('|', p0 + 1);
-			if (p0 == umax || p1 == umax)
+			rpcs3::cache::manifest_record rec;
+			if (!rpcs3::cache::parse_manifest_record(line, rec))
+			{
+				continue;
+			}
+
+			if (!rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, s_spu_manifest_format_version))
 			{
 				continue;
 			}
 
 			std::vector<u8> bytes;
-			if (!rpcs3::cache::get_from_cas(line.substr(p0 + 1, p1 - p0 - 1), bytes) || bytes.size() < 8 || (bytes.size() - 8) % 4)
+			if (!rpcs3::cache::get_from_cas(rec.hash_key, bytes) || bytes.size() < 8 || (bytes.size() - 8) % 4)
 			{
 				continue;
 			}

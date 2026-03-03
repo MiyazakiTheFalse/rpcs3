@@ -8,6 +8,8 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Crypto/sha1.h"
 
+#include <array>
+
 LOG_CHANNEL(sys_log, "SYS");
 
 namespace rpcs3::cache
@@ -37,6 +39,22 @@ namespace rpcs3::cache
 		}
 
 		return path;
+	}
+
+	std::string get_platform_cache_id()
+	{
+		const auto os = utils::get_OS_version();
+		return fmt::format("%s-%s-%u.%u.%u-cpu%X.%X", os.type, os.arch, os.version_major, os.version_minor, os.version_patch, utils::get_cpu_family(), utils::get_cpu_model());
+	}
+
+	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields)
+	{
+		if (platform_fields.empty())
+		{
+			platform_fields = get_platform_cache_id();
+		}
+
+		return fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", emu_cache_schema_version, domain, backend_id, platform_fields);
 	}
 
 	static std::string canonical_sha1_hex(const void* data, std::size_t size)
@@ -105,7 +123,7 @@ namespace rpcs3::cache
 		return f.read(out.data(), out.size()) == out.size();
 	}
 
-	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata)
+	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version)
 	{
 		std::string record = fmt::format("%s|%s", artifact_type, hash_key);
 		if (!metadata.empty())
@@ -113,8 +131,88 @@ namespace rpcs3::cache
 			record += "|";
 			record += metadata;
 		}
+		if (!compatibility_tuple.empty())
+		{
+			record += "|";
+			record += compatibility_tuple;
+		}
+		if (!format_version.empty())
+		{
+			record += "|";
+			record += format_version;
+		}
 		record += "\n";
 		return record;
+	}
+
+	bool parse_manifest_record(std::string_view line, manifest_record& out)
+	{
+		if (!line.empty() && line.back() == '\n')
+		{
+			line.remove_suffix(1);
+		}
+
+		const usz p0 = line.find('|');
+		if (p0 == umax)
+		{
+			return false;
+		}
+
+		const usz p1 = line.find('|', p0 + 1);
+
+		out = {};
+		out.artifact_type = std::string(line.substr(0, p0));
+		if (p1 == umax)
+		{
+			out.hash_key = std::string(line.substr(p0 + 1));
+			return !out.hash_key.empty();
+		}
+
+		out.hash_key = std::string(line.substr(p0 + 1, p1 - p0 - 1));
+
+		usz prev = p1;
+		std::array<std::string*, 3> tails = { &out.metadata, &out.compatibility_tuple, &out.format_version };
+		for (std::string* target : tails)
+		{
+			if (prev == umax)
+			{
+				break;
+			}
+
+			const usz next = line.find('|', prev + 1);
+			if (next == umax)
+			{
+				*target = std::string(line.substr(prev + 1));
+				prev = umax;
+			}
+			else
+			{
+				*target = std::string(line.substr(prev + 1, next - prev - 1));
+				prev = next;
+			}
+		}
+
+		return true;
+	}
+
+	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version)
+	{
+		if (rec.artifact_type != expected_artifact_type)
+		{
+			return false;
+		}
+
+		if (!expected_compatibility_tuple.empty() && rec.compatibility_tuple != expected_compatibility_tuple)
+		{
+			return false;
+		}
+
+		if (!expected_format_version.empty() && rec.format_version != expected_format_version)
+		{
+			return false;
+		}
+
+		return true;
 	}
 
 	void limit_cache_size()

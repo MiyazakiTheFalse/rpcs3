@@ -32,6 +32,10 @@ namespace rsx
 
 		struct pipeline_data
 		{
+			u64 compatibility_hash;
+			u32 serialization_version;
+			u32 reserved_header;
+
 			u64 vertex_program_hash;
 			u64 fragment_program_hash;
 			u64 pipeline_storage_hash;
@@ -70,6 +74,8 @@ namespace rsx
 		std::string version_prefix;
 		std::string root_path;
 		std::string pipeline_class_name;
+		std::string compatibility_tuple;
+		std::string raw_program_format_version;
 		lf_fifo<std::unique_ptr<u8[]>, 100> fragment_program_data;
 
 		backend_storage& m_storage;
@@ -79,9 +85,21 @@ namespace rsx
 			return fmt::format("%s pipeline object %u of %u", index == 0 ? "Loading" : "Compiling", processed, entry_count);
 		}
 
+		u64 get_compatibility_hash() const
+		{
+			u64 hash = rpcs3::fnv_seed;
+			for (const char c : compatibility_tuple)
+			{
+				hash = rpcs3::hash64(hash, static_cast<u8>(c));
+			}
+			return hash;
+		}
+
 		void load_shaders(uint nb_workers, unpacked_type& unpacked, std::string& directory_path, std::vector<fs::dir_entry>& entries, u32 entry_count,
 		    shader_loading_dialog* dlg)
 		{
+			const u64 expected_compatibility_hash = get_compatibility_hash();
+			constexpr u32 expected_serialization_version = 1;
 			atomic_t<u32> processed(0);
 
 			std::function<void(u32)> shader_load_worker = [&](u32 stop_at)
@@ -110,6 +128,12 @@ namespace rsx
 
 					pipeline_data pdata{};
 					f.read(&pdata, f.size());
+
+					if (pdata.serialization_version != expected_serialization_version || pdata.compatibility_hash != expected_compatibility_hash)
+					{
+						rsx_log.notice("Ignoring cached pipeline object %s due to compatibility mismatch", tmp.name.c_str());
+						continue;
+					}
 
 					auto entry = unpack(pdata);
 
@@ -211,6 +235,8 @@ namespace rsx
 		shaders_cache(backend_storage& storage, std::string pipeline_class, std::string version_prefix_str = "v1")
 			: version_prefix(std::move(version_prefix_str))
 			, pipeline_class_name(std::move(pipeline_class))
+			, compatibility_tuple(rpcs3::cache::make_compatibility_tuple("rsx", pipeline_class_name))
+			, raw_program_format_version("rsx-raw-program-v1")
 			, m_storage(storage)
 		{
 			if (!g_cfg.video.disable_on_disk_shader_cache)
@@ -308,13 +334,13 @@ namespace rsx
 			if (!fp_cas.empty())
 			{
 				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
-				fs::write_file(fp_index, fs::rewrite, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length)));
+				fs::write_file(fp_index, fs::rewrite, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
 			}
 
 			if (!vp_cas.empty())
 			{
 				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
-				fs::write_file(vp_index, fs::rewrite, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32))));
+				fs::write_file(vp_index, fs::rewrite, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
 			}
 
 			const u32 state_params[] =
@@ -358,14 +384,13 @@ namespace rsx
 			{
 				return vp;
 			}
-			const usz sep0 = rec.find('|');
-			const usz sep1 = rec.find('|', sep0 + 1);
-			if (sep0 == umax || sep1 == umax)
+			rpcs3::cache::manifest_record idx_rec;
+			if (!rpcs3::cache::parse_manifest_record(rec, idx_rec) || !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, raw_program_format_version))
 			{
 				return vp;
 			}
 			std::vector<u8> bytes;
-			if (!rpcs3::cache::get_from_cas(rec.substr(sep0 + 1, sep1 - sep0 - 1), bytes) || bytes.size() % sizeof(u32))
+			if (!rpcs3::cache::get_from_cas(idx_rec.hash_key, bytes) || bytes.size() % sizeof(u32))
 			{
 				return vp;
 			}
@@ -391,9 +416,10 @@ namespace rsx
 				{
 					return fp;
 				}
-				const usz sep0 = rec.find('|');
-				const usz sep1 = rec.find('|', sep0 + 1);
-				if (sep0 == umax || sep1 == umax || !rpcs3::cache::get_from_cas(rec.substr(sep0 + 1, sep1 - sep0 - 1), cas_bytes))
+				rpcs3::cache::manifest_record idx_rec;
+				if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
+					|| !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, raw_program_format_version)
+					|| !rpcs3::cache::get_from_cas(idx_rec.hash_key, cas_bytes))
 				{
 					return fp;
 				}
@@ -459,6 +485,8 @@ namespace rsx
 		pipeline_data pack(const pipeline_storage_type &pipeline, const RSXVertexProgram &vp, const RSXFragmentProgram &fp)
 		{
 			pipeline_data data_block = {};
+			data_block.compatibility_hash = get_compatibility_hash();
+			data_block.serialization_version = 1;
 			data_block.pipeline_properties = pipeline;
 			data_block.vertex_program_hash = m_storage.get_hash(vp);
 			data_block.fragment_program_hash = m_storage.get_hash(fp);
