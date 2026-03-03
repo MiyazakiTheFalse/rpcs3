@@ -3,6 +3,8 @@
 #include "util/types.hpp"
 #include <string>
 #include <set>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 enum class game_content_type
@@ -17,6 +19,15 @@ enum class game_content_type
 
 namespace rpcs3::utils
 {
+	enum class content_bucket
+	{
+		install_data,
+		patch_update_data,
+		dlc_addon_data,
+		save_data,
+		unknown,
+	};
+
 	u32 get_max_threads();
 
 	void configure_logs(bool force_enable = false);
@@ -63,6 +74,9 @@ namespace rpcs3::utils
 
 	std::set<std::string> get_dir_list(const std::string& base_dir, const std::string& serial);
 	std::set<std::string> get_file_list(const std::string& base_dir, const std::string& serial);
+
+	content_bucket classify_content_bucket(std::string_view category, std::string_view app_ver, std::string_view target_app_ver, std::optional<bool> bootable = std::nullopt);
+	content_bucket classify_title_dir(const std::string& dir_path, const std::string& expected_title_id = {});
 
 	std::string get_rap_file_path(const std::string_view& rap);
 	bool verify_c00_unlock_edat(const std::string_view& content_id, bool fast = false);
