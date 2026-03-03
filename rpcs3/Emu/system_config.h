@@ -254,6 +254,7 @@ struct cfg_root : cfg::node
 		cfg::_enum<audio_channel_layout> channel_layout{ this, "Audio Channel Layout", audio_channel_layout::automatic, false };
 		cfg::string audio_device{ this, "Audio Device", "@@@default@@@", true };
 		cfg::_int<0, 200> volume{ this, "Master Volume", 100, true };
+		cfg::_enum<audio_profile> profile{ this, "Audio Profile", audio_profile::manual, true };
 		cfg::_bool enable_buffering{ this, "Enable Buffering", true, true };
 		cfg::_enum<audio_latency_profile> latency_profile{ this, "Audio Latency Profile", audio_latency_profile::accurate, true };
 		cfg::_int <4, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 34, true };

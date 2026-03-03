@@ -195,6 +195,7 @@ if(BUILD_RPCS3_TESTS)
             tests/test_address_range.cpp
             tests/test_rsx_cfg.cpp
             tests/test_rsx_fp_asm.cpp
+            tests/test_audio_runtime_profile.cpp
     )
 
     target_link_libraries(rpcs3_test

@@ -476,6 +476,8 @@ private:
 		bool convert_to_s16 = false;
 		bool enable_time_stretching = false;
 		bool dump_to_file = false;
+		bool disable_sampling_skip = false;
+		audio_profile profile = audio_profile::manual;
 		AudioChannelCnt channels = AudioChannelCnt::STEREO;
 		audio_channel_layout channel_layout = audio_channel_layout::automatic;
 		audio_renderer renderer = audio_renderer::null;

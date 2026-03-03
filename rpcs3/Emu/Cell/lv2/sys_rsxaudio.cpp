@@ -1372,6 +1372,8 @@ rsxaudio_backend_thread::emu_audio_cfg rsxaudio_backend_thread::get_emu_cfg()
 		.convert_to_s16 = static_cast<bool>(g_cfg.audio.convert_to_s16),
 		.enable_time_stretching = static_cast<bool>(g_cfg.audio.enable_time_stretching),
 		.dump_to_file = static_cast<bool>(g_cfg.audio.dump_to_file),
+		.disable_sampling_skip = static_cast<bool>(g_cfg.audio.disable_sampling_skip),
+		.profile = g_cfg.audio.profile,
 		.channels = out_ch_cnt,
 		.channel_layout = g_cfg.audio.channel_layout,
 		.renderer = g_cfg.audio.renderer,
@@ -1379,8 +1381,20 @@ rsxaudio_backend_thread::emu_audio_cfg rsxaudio_backend_thread::get_emu_cfg()
 		.avport = convert_avport(g_cfg.audio.rsxaudio_port)
 	};
 
-	cfg.buffering_enabled = cfg.buffering_enabled && cfg.renderer != audio_renderer::null;
-	cfg.enable_time_stretching = cfg.buffering_enabled && cfg.enable_time_stretching && cfg.time_stretching_threshold > 0.0;
+	const audio::resolved_runtime_profile runtime_profile = audio::resolve_runtime_profile({
+		.profile = cfg.profile,
+		.buffering_enabled = cfg.buffering_enabled,
+		.desired_buffer_duration = cfg.desired_buffer_duration,
+		.enable_time_stretching = cfg.enable_time_stretching,
+		.time_stretching_threshold = static_cast<s64>(cfg.time_stretching_threshold * 100.0),
+		.disable_sampling_skip = cfg.disable_sampling_skip,
+	});
+
+	cfg.buffering_enabled = runtime_profile.buffering_enabled && cfg.renderer != audio_renderer::null;
+	cfg.desired_buffer_duration = runtime_profile.desired_buffer_duration;
+	cfg.time_stretching_threshold = runtime_profile.time_stretching_threshold / 100.0;
+	cfg.enable_time_stretching = cfg.buffering_enabled && runtime_profile.enable_time_stretching && cfg.time_stretching_threshold > 0.0;
+	cfg.disable_sampling_skip = runtime_profile.disable_sampling_skip;
 
 	return cfg;
 }
@@ -1499,6 +1513,7 @@ void rsxaudio_backend_thread::operator()()
 
 			if (emu_cfg.enable_time_stretching)
 			{
+				resampler.set_preset(emu_cfg.profile);
 				resampler.set_params(backend_current_cfg.cfg.ch_cnt, backend_current_cfg.cfg.freq);
 				resampler.set_tempo(RESAMPLER_MAX_FREQ_VAL);
 			}
