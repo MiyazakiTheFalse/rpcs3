@@ -27,6 +27,15 @@ namespace rpcs3::cache
 		cold = 3,
 	};
 
+	enum class cas_artifact_type : u8
+	{
+		auto_select = 0,
+		spu_function_blob = 1,
+		ppu_object_blob = 2,
+		rsx_raw_fp_blob = 3,
+		rsx_raw_vp_blob = 4,
+	};
+
 	struct manifest_record
 	{
 		std::string artifact_type;
@@ -42,14 +51,19 @@ namespace rpcs3::cache
 	std::string get_shared_cas_root();
 	std::string get_platform_cache_id();
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields = {});
+	std::string_view to_manifest_artifact_name(cas_artifact_type artifact);
+	cas_cache_tier get_default_tier_for_artifact(cas_artifact_type artifact);
 
+	std::string put_to_cas(const void* data, std::size_t size, cas_artifact_type artifact, cas_cache_tier tier = cas_cache_tier::auto_select);
 	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension = {}, cas_cache_tier tier = cas_cache_tier::auto_select, cas_codec codec = cas_codec::auto_select);
 	bool write_file_atomic(const std::string& path, const void* data, std::size_t size);
 	bool write_text_file_atomic(const std::string& path, std::string_view text);
 	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal = true);
 	bool get_from_cas(const std::string& hash_key, std::vector<uchar>& out);
+	std::string make_manifest_record(cas_artifact_type artifact, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_cache_tier tier = cas_cache_tier::auto_select);
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_codec codec = cas_codec::auto_select, cas_cache_tier tier = cas_cache_tier::auto_select);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);
+	bool is_manifest_record_compatible(const manifest_record& rec, cas_artifact_type expected_artifact, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec = cas_codec::auto_select, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	void limit_cache_size();
 }

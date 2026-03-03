@@ -5337,10 +5337,10 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					{
 						std::vector<u8> bytes(compiled_obj.size());
 						compiled_obj.read(bytes.data(), bytes.size());
-						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), "obj"); !cas.empty())
+						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), rpcs3::cache::cas_artifact_type::ppu_object_blob); !cas.empty())
 						{
 							rpcs3::cache::append_manifest_record_atomic(cache_path + "manifest.index",
-								rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot));
+								rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::ppu_object_blob, cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
 						}
 					}
 

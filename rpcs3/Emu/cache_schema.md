@@ -77,6 +77,33 @@ Compatibility behavior:
 - Older versions are still accepted through explicit fallback checks to avoid cache invalidation storms during rolling upgrades.
 - CAS blobs stay content-addressed, so mixed old/new manifests can safely coexist.
 
+
+## Authoritative CAS artifact policy mapping
+
+CAS policy selection is centralized in `rpcs3/Emu/cache_utils.*` via `cas_artifact_type` + `get_policy_for_artifact(...)`. Producers should pass only artifact identity (and optional explicit tier override), never an explicit codec.
+
+Current mapping:
+
+- `spu_function_blob` -> manifest artifact `spu` -> default tier `hot` -> codec inferred as `LZ4`
+- `ppu_object_blob` -> manifest artifact `ppu_obj` -> default tier `hot` -> codec inferred as `LZ4`
+- `rsx_raw_fp_blob` -> manifest artifact `fp` -> default tier `warm` -> codec inferred as `Zstd`
+- `rsx_raw_vp_blob` -> manifest artifact `vp` -> default tier `warm` -> codec inferred as `Zstd`
+
+Rationale:
+
+- SPU function blobs and PPU object blobs are frequently re-read on preload/hot startup paths, so they default to `hot` for faster decode (`LZ4`).
+- RSX raw FP/VP blobs are more archival/rebuild-oriented and less latency sensitive per access, so they default to `warm` (`Zstd`) for better space efficiency.
+
+## CAS telemetry for tuning
+
+`cache_utils` maintains lightweight CAS counters for operational tuning:
+
+- Encode/decode counts by codec (`none`/`LZ4`/`Zstd`)
+- Total compressed/uncompressed throughput bytes
+- Decode failure count (decompression/checksum failures)
+
+Stats are emitted periodically to `SYS` logs (sampled every 256 CAS encode/decode events).
+
 ## CAS retention policy
 
 - CAS blobs remain content-addressed and are not deleted during compatibility migration.

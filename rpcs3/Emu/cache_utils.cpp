@@ -239,6 +239,106 @@ namespace rpcs3::cache
 			}
 		}
 
+		struct cas_storage_policy
+		{
+			std::string_view manifest_name;
+			cas_cache_tier default_tier;
+		};
+
+		cas_storage_policy get_policy_for_artifact(cas_artifact_type artifact)
+		{
+			switch (artifact)
+			{
+			case cas_artifact_type::spu_function_blob:
+				return {"spu", cas_cache_tier::hot};
+			case cas_artifact_type::ppu_object_blob:
+				return {"ppu_obj", cas_cache_tier::hot};
+			case cas_artifact_type::rsx_raw_fp_blob:
+				return {"fp", cas_cache_tier::warm};
+			case cas_artifact_type::rsx_raw_vp_blob:
+				return {"vp", cas_cache_tier::warm};
+			default:
+				return {std::string_view{}, cas_cache_tier::auto_select};
+			}
+		}
+
+		struct cas_metrics
+		{
+			atomic_t<u64> encode_lz4_count{};
+			atomic_t<u64> encode_zstd_count{};
+			atomic_t<u64> encode_none_count{};
+			atomic_t<u64> decode_lz4_count{};
+			atomic_t<u64> decode_zstd_count{};
+			atomic_t<u64> decode_none_count{};
+			atomic_t<u64> encode_input_bytes{};
+			atomic_t<u64> encode_output_bytes{};
+			atomic_t<u64> decode_output_bytes{};
+			atomic_t<u64> decode_failures{};
+		};
+
+		cas_metrics& get_cas_metrics()
+		{
+			static cas_metrics s_metrics{};
+			return s_metrics;
+		}
+
+		void record_encode_metrics(cas_codec codec, usz src_size, usz compressed_size)
+		{
+			auto& m = get_cas_metrics();
+			m.encode_input_bytes += src_size;
+			m.encode_output_bytes += compressed_size;
+			switch (codec)
+			{
+			case cas_codec::none: m.encode_none_count++; break;
+			case cas_codec::lz4: m.encode_lz4_count++; break;
+			case cas_codec::zstd: m.encode_zstd_count++; break;
+			default: break;
+			}
+		}
+
+		void record_decode_metrics(cas_codec codec, usz decoded_size, bool ok)
+		{
+			auto& m = get_cas_metrics();
+			if (!ok)
+			{
+				m.decode_failures++;
+				return;
+			}
+			m.decode_output_bytes += decoded_size;
+			switch (codec)
+			{
+			case cas_codec::none: m.decode_none_count++; break;
+			case cas_codec::lz4: m.decode_lz4_count++; break;
+			case cas_codec::zstd: m.decode_zstd_count++; break;
+			default: break;
+			}
+		}
+
+		void log_cas_stats_if_needed()
+		{
+			static atomic_t<u64> s_event_count{};
+			const u64 event_count = ++s_event_count;
+			if ((event_count % 256) != 0)
+			{
+				return;
+			}
+
+			const auto& m = get_cas_metrics();
+			sys_log.notice("CAS stats: enc[n=%llu lz4=%llu zstd=%llu none=%llu in=%llu out=%llu] dec[n=%llu lz4=%llu zstd=%llu none=%llu out=%llu fail=%llu]",
+				m.encode_lz4_count + m.encode_zstd_count + m.encode_none_count,
+				m.encode_lz4_count,
+				m.encode_zstd_count,
+				m.encode_none_count,
+				m.encode_input_bytes,
+				m.encode_output_bytes,
+				m.decode_lz4_count + m.decode_zstd_count + m.decode_none_count,
+				m.decode_lz4_count,
+				m.decode_zstd_count,
+				m.decode_none_count,
+				m.decode_output_bytes,
+				m.decode_failures);
+		}
+
 		bool compress_blob(cas_codec codec, const uchar* src, usz size, std::vector<uchar>& compressed, cas_codec& resolved_codec)
 		{
 			resolved_codec = codec;
@@ -318,6 +418,26 @@ namespace rpcs3::cache
 		}
 	}
 
+	std::string_view to_manifest_artifact_name(cas_artifact_type artifact)
+	{
+		return get_policy_for_artifact(artifact).manifest_name;
+	}
+
+	cas_cache_tier get_default_tier_for_artifact(cas_artifact_type artifact)
+	{
+		return get_policy_for_artifact(artifact).default_tier;
+	}
+
+	std::string put_to_cas(const void* data, std::size_t size, cas_artifact_type artifact, cas_cache_tier tier)
+	{
+		if (tier == cas_cache_tier::auto_select)
+		{
+			tier = get_default_tier_for_artifact(artifact);
+		}
+
+		return put_to_cas(data, size, to_manifest_artifact_name(artifact), tier, cas_codec::auto_select);
+	}
+
 	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension, cas_cache_tier tier, cas_codec codec)
 	{
 		if (!data || !size)
@@ -360,6 +480,9 @@ namespace rpcs3::cache
 			sys_log.error("Failed to compress CAS object %s (codec=%u)", object_path, static_cast<u8>(codec));
 			return {};
 		}
+
+		record_encode_metrics(resolved_codec, size, compressed.size());
+		log_cas_stats_if_needed();
 
 		cas_blob_header hdr{};
 		hdr.magic = s_cas_blob_magic;
@@ -443,17 +566,34 @@ namespace rpcs3::cache
 		const uchar* payload = in.data() + sizeof(hdr);
 		out.resize(static_cast<usz>(hdr.uncompressed_size));
 
-		if (!decompress_blob(static_cast<cas_codec>(hdr.codec), payload, payload_size, out.data(), out.size()))
+		const auto codec = static_cast<cas_codec>(hdr.codec);
+		if (!decompress_blob(codec, payload, payload_size, out.data(), out.size()))
 		{
+			record_decode_metrics(codec, 0, false);
+			log_cas_stats_if_needed();
 			return false;
 		}
 
 		if ((hdr.flags & s_cas_flag_checksum32) && get_checksum32(out.data(), out.size()) != hdr.checksum32)
 		{
+			record_decode_metrics(codec, 0, false);
+			log_cas_stats_if_needed();
 			return false;
 		}
 
+		record_decode_metrics(codec, out.size(), true);
+		log_cas_stats_if_needed();
 		return true;
+	}
+
+	std::string make_manifest_record(cas_artifact_type artifact, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version, cas_cache_tier tier)
+	{
+		if (tier == cas_cache_tier::auto_select)
+		{
+			tier = get_default_tier_for_artifact(artifact);
+		}
+
+		return make_manifest_record(to_manifest_artifact_name(artifact), hash_key, metadata, compatibility_tuple, format_version, cas_codec::auto_select, tier);
 	}
 
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version, cas_codec codec, cas_cache_tier tier)
@@ -561,6 +701,11 @@ namespace rpcs3::cache
 		}
 
 		return true;
+	}
+
+	bool is_manifest_record_compatible(const manifest_record& rec, cas_artifact_type expected_artifact, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_cache_tier expected_tier)
+	{
+		return is_manifest_record_compatible(rec, to_manifest_artifact_name(expected_artifact), expected_compatibility_tuple, expected_format_version, cas_codec::auto_select, expected_tier);
 	}
 
 	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec, cas_cache_tier expected_tier)
