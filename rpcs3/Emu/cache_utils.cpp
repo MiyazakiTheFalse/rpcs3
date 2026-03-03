@@ -344,6 +344,8 @@ namespace rpcs3::cache
 				return {"fp", cas_cache_tier::warm};
 			case cas_artifact_type::rsx_raw_vp_blob:
 				return {"vp", cas_cache_tier::warm};
+			case cas_artifact_type::rsx_pipeline_blob:
+				return {"rsx_pipeline", cas_cache_tier::hot};
 			default:
 				return {std::string_view{}, cas_cache_tier::auto_select};
 			}
