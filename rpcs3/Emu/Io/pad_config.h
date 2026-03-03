@@ -80,6 +80,21 @@ struct cfg_pad final : cfg::node
 	cfg::_bool pressure_intensity_toggle_mode{ this, "Pressure Intensity Toggle Mode", false };
 	cfg::uint<0, 255> pressure_intensity_deadzone{ this, "Pressure Intensity Deadzone", 0 };
 
+	cfg::uint<0, 255> pressure_face_deadzone{ this, "Pressure Face Deadzone", 0 };
+	cfg::_float<0.1, 4.0> pressure_face_gamma{ this, "Pressure Face Gamma", 1.0f };
+	cfg::_bool pressure_face_saturation_enabled{ this, "Pressure Face Saturation Enabled", false };
+	cfg::uint<0, 255> pressure_face_saturation{ this, "Pressure Face Saturation", 255 };
+
+	cfg::uint<0, 255> pressure_dpad_deadzone{ this, "Pressure DPad Deadzone", 0 };
+	cfg::_float<0.1, 4.0> pressure_dpad_gamma{ this, "Pressure DPad Gamma", 1.0f };
+	cfg::_bool pressure_dpad_saturation_enabled{ this, "Pressure DPad Saturation Enabled", false };
+	cfg::uint<0, 255> pressure_dpad_saturation{ this, "Pressure DPad Saturation", 255 };
+
+	cfg::uint<0, 255> pressure_shoulder_deadzone{ this, "Pressure Shoulder Deadzone", 0 };
+	cfg::_float<0.1, 4.0> pressure_shoulder_gamma{ this, "Pressure Shoulder Gamma", 1.0f };
+	cfg::_bool pressure_shoulder_saturation_enabled{ this, "Pressure Shoulder Saturation Enabled", false };
+	cfg::uint<0, 255> pressure_shoulder_saturation{ this, "Pressure Shoulder Saturation", 255 };
+
 	cfg::string analog_limiter_button{ this, "Analog Limiter Button", "" };
 	cfg::_bool analog_limiter_toggle_mode{ this, "Analog Limiter Toggle Mode", false };
 	cfg::uint<0, 200> lstickmultiplier{ this, "Left Stick Multiplier", 100 };

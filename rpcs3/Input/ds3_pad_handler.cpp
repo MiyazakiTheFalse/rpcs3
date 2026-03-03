@@ -357,6 +357,17 @@ std::unordered_map<u64, u16> ds3_pad_handler::get_button_values(const std::share
 
 	const ds3_input_report& report = dev->report;
 
+	const cfg_pad* cfg = device ? device->config : nullptr;
+	const auto apply_group_calibration = [&](u16 raw, pressure_button_group group) -> u16
+	{
+		if (raw == 0)
+		{
+			return 0;
+		}
+
+		return ApplyPressureCalibration(raw, cfg, group);
+	};
+
 	// Left Stick X Axis
 	key_buf[DS3KeyCodes::LSXNeg] = Clamp0To255((127.5f - report.lsx) * 2.0f);
 	key_buf[DS3KeyCodes::LSXPos] = Clamp0To255((report.lsx - 127.5f) * 2.0f);
@@ -374,18 +385,18 @@ std::unordered_map<u64, u16> ds3_pad_handler::get_button_values(const std::share
 	key_buf[DS3KeyCodes::RSYPos] = Clamp0To255((127.5f - report.rsy) * 2.0f);
 
 	// Buttons or triggers with pressure sensitivity
-	key_buf[DS3KeyCodes::Up]       = (report.buttons[0] & 0x10) ? report.button_values[0] : 0;
-	key_buf[DS3KeyCodes::Right]    = (report.buttons[0] & 0x20) ? report.button_values[1] : 0;
-	key_buf[DS3KeyCodes::Down]     = (report.buttons[0] & 0x40) ? report.button_values[2] : 0;
-	key_buf[DS3KeyCodes::Left]     = (report.buttons[0] & 0x80) ? report.button_values[3] : 0;
-	key_buf[DS3KeyCodes::L2]       = (report.buttons[1] & 0x01) ? report.button_values[4] : 0;
-	key_buf[DS3KeyCodes::R2]       = (report.buttons[1] & 0x02) ? report.button_values[5] : 0;
-	key_buf[DS3KeyCodes::L1]       = (report.buttons[1] & 0x04) ? report.button_values[6] : 0;
-	key_buf[DS3KeyCodes::R1]       = (report.buttons[1] & 0x08) ? report.button_values[7] : 0;
-	key_buf[DS3KeyCodes::Triangle] = (report.buttons[1] & 0x10) ? report.button_values[8] : 0;
-	key_buf[DS3KeyCodes::Circle]   = (report.buttons[1] & 0x20) ? report.button_values[9] : 0;
-	key_buf[DS3KeyCodes::Cross]    = (report.buttons[1] & 0x40) ? report.button_values[10] : 0;
-	key_buf[DS3KeyCodes::Square]   = (report.buttons[1] & 0x80) ? report.button_values[11] : 0;
+	key_buf[DS3KeyCodes::Up]       = (report.buttons[0] & 0x10) ? apply_group_calibration(report.button_values[0], pressure_button_group::dpad) : 0;
+	key_buf[DS3KeyCodes::Right]    = (report.buttons[0] & 0x20) ? apply_group_calibration(report.button_values[1], pressure_button_group::dpad) : 0;
+	key_buf[DS3KeyCodes::Down]     = (report.buttons[0] & 0x40) ? apply_group_calibration(report.button_values[2], pressure_button_group::dpad) : 0;
+	key_buf[DS3KeyCodes::Left]     = (report.buttons[0] & 0x80) ? apply_group_calibration(report.button_values[3], pressure_button_group::dpad) : 0;
+	key_buf[DS3KeyCodes::L2]       = (report.buttons[1] & 0x01) ? apply_group_calibration(report.button_values[4], pressure_button_group::shoulder) : 0;
+	key_buf[DS3KeyCodes::R2]       = (report.buttons[1] & 0x02) ? apply_group_calibration(report.button_values[5], pressure_button_group::shoulder) : 0;
+	key_buf[DS3KeyCodes::L1]       = (report.buttons[1] & 0x04) ? apply_group_calibration(report.button_values[6], pressure_button_group::shoulder) : 0;
+	key_buf[DS3KeyCodes::R1]       = (report.buttons[1] & 0x08) ? apply_group_calibration(report.button_values[7], pressure_button_group::shoulder) : 0;
+	key_buf[DS3KeyCodes::Triangle] = (report.buttons[1] & 0x10) ? apply_group_calibration(report.button_values[8], pressure_button_group::face) : 0;
+	key_buf[DS3KeyCodes::Circle]   = (report.buttons[1] & 0x20) ? apply_group_calibration(report.button_values[9], pressure_button_group::face) : 0;
+	key_buf[DS3KeyCodes::Cross]    = (report.buttons[1] & 0x40) ? apply_group_calibration(report.button_values[10], pressure_button_group::face) : 0;
+	key_buf[DS3KeyCodes::Square]   = (report.buttons[1] & 0x80) ? apply_group_calibration(report.button_values[11], pressure_button_group::face) : 0;
 
 	// Buttons without pressure sensitivity
 	key_buf[DS3KeyCodes::Select]   = (report.buttons[0] & 0x01) ? 255 : 0;

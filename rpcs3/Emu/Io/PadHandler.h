@@ -118,6 +118,22 @@ public:
 		two_directional  // Treat trigger axis as two-directional only (similar to sticks)
 	};
 
+	enum class pressure_button_group
+	{
+		none,
+		face,
+		dpad,
+		shoulder
+	};
+
+	struct pressure_calibration
+	{
+		u16 deadzone = 0;
+		f32 gamma = 1.0f;
+		bool saturation_enabled = false;
+		u16 saturation = 255;
+	};
+
 protected:
 	enum button
 	{
@@ -392,6 +408,11 @@ protected:
 	virtual std::array<std::set<u32>, PadHandlerBase::button::button_count> get_mapped_key_codes(const std::shared_ptr<PadDevice>& device, const cfg_pad* cfg);
 	virtual void get_mapping(const pad_ensemble& binding);
 	void TranslateButtonPress(const std::shared_ptr<PadDevice>& device, u64 keyCode, bool& pressed, u16& val, bool use_stick_multipliers, bool ignore_stick_threshold = false, bool ignore_trigger_threshold = false);
+	pressure_button_group get_pressure_button_group(const Button& button) const;
+	pressure_calibration get_pressure_calibration(const cfg_pad* cfg, pressure_button_group group) const;
+	u16 ApplyPressureCalibration(u16 value, const pressure_calibration& calibration) const;
+	u16 ApplyPressureCalibration(u16 value, const cfg_pad* cfg, pressure_button_group group) const;
+
 	void init_configs();
 	cfg_pad* get_config(const std::string& pad_id);
 
