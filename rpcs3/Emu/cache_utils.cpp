@@ -177,6 +177,12 @@ namespace rpcs3::cache
 		}
 	}
 
+	namespace
+	{
+		std::mutex s_current_run_mutex;
+		std::unordered_map<std::string, std::string> s_current_run_id_by_title;
+	}
+
 	bool write_file_atomic(const std::string& path, const void* data, std::size_t size)
 	{
 		if (!data || !size)
@@ -870,6 +876,16 @@ namespace rpcs3::cache
 		return out;
 	}
 
+	static std::string make_catalog_runs_root(std::string_view title_id)
+	{
+		return rpcs3::utils::get_cache_dir() + "catalog/" + std::string(title_id) + "/runs/";
+	}
+
+	static std::string make_run_json_path(std::string_view title_id, std::string_view run_id)
+	{
+		return make_catalog_runs_root(title_id) + std::string(run_id) + ".json";
+	}
+
 	static u64 get_unix_epoch_seconds_now()
 	{
 		return static_cast<u64>(std::time(nullptr));
@@ -945,7 +961,12 @@ namespace rpcs3::cache
 			settings_hash.substr(0, 12),
 			gpu_fingerprint.empty() ? "" : ("-gpu" + gpu_hash.substr(0, 12)));
 
-		const std::string catalog_root = rpcs3::utils::get_cache_dir() + "catalog/" + title_id + "/runs/";
+		{
+			const std::lock_guard lock(s_current_run_mutex);
+			s_current_run_id_by_title[title_id] = run_id;
+		}
+
+		const std::string catalog_root = make_catalog_runs_root(title_id);
 		if (!fs::is_dir(catalog_root) && !fs::create_path(catalog_root))
 		{
 			sys_log.error("Failed to initialize cache catalog directory %s (%s)", catalog_root, fs::g_tls_error);
@@ -1050,6 +1071,7 @@ namespace rpcs3::cache
 			std::optional<u64> last_accessed_at;
 			std::string run_reason;
 			std::string label;
+			std::vector<std::string> hashes;
 		};
 
 		std::string extract_json_string(std::string_view text, std::string_view key)
@@ -1180,21 +1202,18 @@ namespace rpcs3::cache
 			metadata.last_accessed_at = extract_json_timestamp(content, "last_accessed_at");
 			metadata.run_reason = extract_json_string(content, "run_reason");
 			metadata.label = extract_json_string(content, "label");
+
+			const std::regex hash_re("\"hash\"\\s*:\\s*\"([0-9a-fA-F]{40})\"");
+			const std::string input(content);
+			for (std::sregex_iterator it(input.begin(), input.end(), hash_re), end_it; it != end_it; ++it)
+			{
+				metadata.hashes.emplace_back((*it)[1].str());
+			}
+
 			return metadata;
 		}
 
-		std::vector<std::string> extract_entry_hashes(std::string_view text)
-		{
-			std::vector<std::string> hashes;
-			const std::regex re("\"hash\"\\s*:\\s*\"([0-9a-fA-F]{40})\"");
-			const std::string input(text);
-			for (std::sregex_iterator it(input.begin(), input.end(), re), end_it; it != end_it; ++it)
-			{
-				hashes.emplace_back((*it)[1].str());
-			}
 
-			return hashes;
-		}
 
 		std::vector<gc_run_info> scan_catalog_runs()
 		{
@@ -1244,7 +1263,7 @@ namespace rpcs3::cache
 						run.title_id = title_dir.name;
 					}
 					run.pinned = metadata.pinned;
-					run.hashes = extract_entry_hashes(content);
+					run.hashes = metadata.hashes;
 					runs.emplace_back(std::move(run));
 				}
 			}
@@ -1302,7 +1321,114 @@ namespace rpcs3::cache
 		}
 	}
 
-	void run_policy_gc()
+
+	std::vector<run_info> list_runs(std::string_view title_id)
+	{
+		std::vector<run_info> out;
+		if (title_id.empty())
+		{
+			return out;
+		}
+
+		const std::string runs_root = make_catalog_runs_root(title_id);
+		if (!fs::is_dir(runs_root))
+		{
+			return out;
+		}
+
+		for (const auto& run_file : fs::dir(runs_root))
+		{
+			if (run_file.is_directory || run_file.name == "." || run_file.name == ".." || !run_file.name.ends_with(".json"))
+			{
+				continue;
+			}
+
+			std::string content;
+			const std::string full_path = runs_root + run_file.name;
+			if (!fs::read_file(full_path, content))
+			{
+				continue;
+			}
+
+			const run_json_metadata metadata = parse_run_json_metadata(content, run_file.mtime);
+			run_info info{};
+			info.title_id = metadata.title_id.empty() ? std::string(title_id) : std::move(metadata.title_id);
+			info.run_id = run_file.name.substr(0, run_file.name.size() - 5);
+			info.created_at = metadata.created_at;
+			info.last_accessed_at = metadata.last_accessed_at.value_or(metadata.created_at);
+			info.pinned = metadata.pinned;
+			info.run_reason = std::move(metadata.run_reason);
+			info.label = std::move(metadata.label);
+			out.emplace_back(std::move(info));
+		}
+
+		std::sort(out.begin(), out.end(), [](const run_info& lhs, const run_info& rhs)
+		{
+			if (lhs.last_accessed_at != rhs.last_accessed_at)
+			{
+				return lhs.last_accessed_at > rhs.last_accessed_at;
+			}
+
+			return lhs.run_id > rhs.run_id;
+		});
+
+		return out;
+	}
+
+	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned)
+	{
+		if (title_id.empty() || run_id.empty())
+		{
+			return false;
+		}
+
+		std::string run_json;
+		const std::string run_path = make_run_json_path(title_id, run_id);
+		if (!fs::read_file(run_path, run_json))
+		{
+			return false;
+		}
+
+		if (!upsert_json_key_value(run_json, "pinned", pinned ? "true" : "false"))
+		{
+			return false;
+		}
+
+		return write_text_file_atomic(run_path, run_json);
+	}
+
+	bool set_current_run_pinned(bool pinned)
+	{
+		const std::string title_id = Emu.GetTitleID();
+		if (title_id.empty())
+		{
+			return false;
+		}
+
+		std::string run_id;
+		{
+			const std::lock_guard lock(s_current_run_mutex);
+			if (const auto it = s_current_run_id_by_title.find(title_id); it != s_current_run_id_by_title.end())
+			{
+				run_id = it->second;
+			}
+		}
+
+		if (!run_id.empty())
+		{
+			return set_run_pinned(title_id, run_id, pinned);
+		}
+
+		auto runs = list_runs(title_id);
+		if (runs.empty())
+		{
+			return false;
+		}
+
+		return set_run_pinned(title_id, runs.front().run_id, pinned);
+	}
+
+	void run_policy_gc(bool hard_emergency_mode)
 	{
 		auto runs = scan_catalog_runs();
 		std::unordered_map<std::string, std::vector<usz>> runs_by_title;
@@ -1404,7 +1530,7 @@ namespace rpcs3::cache
 				std::vector<usz> evictable;
 				for (usz i = 0; i < runs.size(); ++i)
 				{
-					if (runs[i].retained && !runs[i].pinned)
+					if (runs[i].retained && (hard_emergency_mode || !runs[i].pinned))
 					{
 						evictable.push_back(i);
 					}
@@ -1459,7 +1585,7 @@ namespace rpcs3::cache
 
 	void limit_cache_size()
 	{
-		run_policy_gc();
+		run_policy_gc(false);
 	}
 
 }
