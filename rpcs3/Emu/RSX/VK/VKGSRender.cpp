@@ -604,7 +604,8 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 		{"gpu", m_device->gpu().get_name()},
 		{"driver", m_device->gpu().get_driver_version()},
 	});
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95", cache_platform_fields);
+	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 
 	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
 	{
