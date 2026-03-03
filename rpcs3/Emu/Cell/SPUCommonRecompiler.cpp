@@ -21,6 +21,7 @@
 #include "SPUInterpreter.h"
 #include "SPUDisAsm.h"
 #include <algorithm>
+#include <charconv>
 #include <cstring>
 #include <optional>
 #include <unordered_set>
@@ -699,12 +700,132 @@ namespace
 		}
 
 		const std::string filename = get_spu_cache_filename();
-		const bool manifest_ok = rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
-			rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::spu_function_blob, cas, std::to_string(entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
+		const std::string manifest_loc = ppu_cache + filename + ".manifest";
+		const std::string compatibility_tuple = get_spu_cache_compatibility_tuple();
+
+		rpcs3::cache::manifest_record new_record{};
+		new_record.artifact_type = std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::spu_function_blob));
+		new_record.hash_key = cas;
+		new_record.metadata = std::to_string(entry_point);
+		new_record.compatibility_tuple = compatibility_tuple;
+		new_record.format_version = std::string(s_spu_manifest_format_version);
+		new_record.tier = std::to_string(static_cast<u8>(rpcs3::cache::get_default_tier_for_artifact(rpcs3::cache::cas_artifact_type::spu_function_blob)));
+
+		std::vector<rpcs3::cache::manifest_record> records;
+		records.reserve(512);
+
+		if (fs::file mf(manifest_loc))
+		{
+			for (std::string line; mf.read_line(line);)
+			{
+				rpcs3::cache::manifest_record rec;
+				if (rpcs3::cache::parse_manifest_record(line, rec))
+				{
+					records.emplace_back(std::move(rec));
+				}
+			}
+		}
+
+		records.emplace_back(std::move(new_record));
+
+		std::sort(records.begin(), records.end(), [](const rpcs3::cache::manifest_record& lhs, const rpcs3::cache::manifest_record& rhs)
+		{
+			auto to_numeric_metadata = [](std::string_view value)
+			{
+				u64 output = 0;
+				const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), output);
+				if (ec == std::errc{} && ptr == value.data() + value.size())
+				{
+					return std::optional<u64>(output);
+				}
+
+				return std::optional<u64>();
+			};
+
+			const std::optional<u64> lhs_num = to_numeric_metadata(lhs.metadata);
+			const std::optional<u64> rhs_num = to_numeric_metadata(rhs.metadata);
+			if (lhs_num && rhs_num && *lhs_num != *rhs_num)
+			{
+				return *lhs_num < *rhs_num;
+			}
+
+			if (lhs.metadata != rhs.metadata)
+			{
+				return lhs.metadata < rhs.metadata;
+			}
+
+			if (lhs.artifact_type != rhs.artifact_type)
+			{
+				return lhs.artifact_type < rhs.artifact_type;
+			}
+
+			if (lhs.compatibility_tuple != rhs.compatibility_tuple)
+			{
+				return lhs.compatibility_tuple < rhs.compatibility_tuple;
+			}
+
+			if (lhs.format_version != rhs.format_version)
+			{
+				return lhs.format_version < rhs.format_version;
+			}
+
+			return lhs.hash_key < rhs.hash_key;
+		});
+
+		auto is_same_key = [](const rpcs3::cache::manifest_record& lhs, const rpcs3::cache::manifest_record& rhs)
+		{
+			return lhs.artifact_type == rhs.artifact_type
+				&& lhs.metadata == rhs.metadata
+				&& lhs.compatibility_tuple == rhs.compatibility_tuple
+				&& lhs.format_version == rhs.format_version;
+		};
+
+		std::vector<rpcs3::cache::manifest_record> compacted;
+		compacted.reserve(records.size());
+		for (const auto& rec : records)
+		{
+			if (!compacted.empty() && is_same_key(compacted.back(), rec))
+			{
+				compacted.back() = rec;
+				continue;
+			}
+
+			compacted.emplace_back(rec);
+		}
+
+		std::string manifest_text;
+		for (const auto& rec : compacted)
+		{
+			rpcs3::cache::cas_codec codec = rpcs3::cache::cas_codec::auto_select;
+			if (!rec.codec.empty())
+			{
+				u32 codec_num = 0;
+				const auto [ptr, ec] = std::from_chars(rec.codec.data(), rec.codec.data() + rec.codec.size(), codec_num);
+				if (ec == std::errc{} && ptr == rec.codec.data() + rec.codec.size())
+				{
+					codec = static_cast<rpcs3::cache::cas_codec>(codec_num);
+				}
+			}
+
+			rpcs3::cache::cas_cache_tier tier = rpcs3::cache::cas_cache_tier::auto_select;
+			if (!rec.tier.empty())
+			{
+				u32 tier_num = 0;
+				const auto [ptr, ec] = std::from_chars(rec.tier.data(), rec.tier.data() + rec.tier.size(), tier_num);
+				if (ec == std::errc{} && ptr == rec.tier.data() + rec.tier.size())
+				{
+					tier = static_cast<rpcs3::cache::cas_cache_tier>(tier_num);
+				}
+			}
+
+			manifest_text += rpcs3::cache::make_manifest_record(rec.artifact_type, rec.hash_key, rec.metadata, rec.compatibility_tuple, rec.format_version, codec, tier);
+		}
+
+		const bool manifest_ok = rpcs3::cache::write_text_file_atomic(manifest_loc, manifest_text);
 
 		if (!manifest_ok)
 		{
-			spu_log.error("SPU cache: failed to append manifest record for entry 0x%05x", entry_point);
+			spu_log.error("SPU cache: failed to persist manifest record for entry 0x%05x", entry_point);
 		}
 
 		return manifest_ok;
