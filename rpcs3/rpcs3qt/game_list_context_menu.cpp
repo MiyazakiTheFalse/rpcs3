@@ -10,6 +10,7 @@
 #include "pad_settings_dialog.h"
 #include "patch_manager_dialog.h"
 #include "persistent_settings.h"
+#include "content_classifier.h"
 
 #include "Utilities/File.h"
 #include "Emu/system_utils.hpp"
@@ -199,6 +200,16 @@ void game_list_context_menu::show_single_selection_context_menu(const game_info&
 	const std::string cache_base_dir = fs::get_path_if_dir(rpcs3::utils::get_cache_dir_by_serial(serial));
 	const bool has_hdd1_cache_dir = !rpcs3::utils::get_dir_list(rpcs3::utils::get_hdd1_cache_dir(), serial).empty();
 	const std::string savestates_dir = fs::get_path_if_dir(rpcs3::utils::get_savestates_dir(serial));
+	const game_list_actions::content_info content_info = m_game_list_actions->GetContentInfo({gameinfo});
+	const auto has_bucket = [&content_info, &serial](content_classifier::bucket bucket)
+	{
+		if (const auto serial_it = content_info.bucketed_path_list.find(serial); serial_it != content_info.bucketed_path_list.end())
+		{
+			if (const auto bucket_it = serial_it->second.find(bucket); bucket_it != serial_it->second.end())
+				return !bucket_it->second.empty();
+		}
+		return false;
+	};
 
 	if (!cache_base_dir.empty())
 	{
@@ -244,6 +255,55 @@ void game_list_context_menu::show_single_selection_context_menu(const game_info&
 		{
 			m_game_list_actions->RemoveAllCaches(serial, true);
 		});
+	}
+
+	if (has_bucket(content_classifier::bucket::install_data) || has_bucket(content_classifier::bucket::patch_update_data) || has_bucket(content_classifier::bucket::dlc_addon_data) || has_bucket(content_classifier::bucket::save_data))
+	{
+		remove_menu->addSeparator();
+
+		if (has_bucket(content_classifier::bucket::install_data))
+		{
+			QAction* remove_install_data = remove_menu->addAction(tr("&Delete Install Data"));
+			remove_install_data->setEnabled(!is_current_running_game);
+			connect(remove_install_data, &QAction::triggered, this, [this, serial, content_info]()
+			{
+				m_game_list_actions->SetContentList(game_list_actions::content_type::INSTALL_DATA, content_info);
+				m_game_list_actions->RemoveInstallData(serial, true);
+			});
+		}
+
+		if (has_bucket(content_classifier::bucket::patch_update_data))
+		{
+			QAction* remove_patches = remove_menu->addAction(tr("&Delete Patches/Updates"));
+			remove_patches->setEnabled(!is_current_running_game);
+			connect(remove_patches, &QAction::triggered, this, [this, serial, content_info]()
+			{
+				m_game_list_actions->SetContentList(game_list_actions::content_type::PATCHES, content_info);
+				m_game_list_actions->RemovePatches(serial, true);
+			});
+		}
+
+		if (has_bucket(content_classifier::bucket::dlc_addon_data))
+		{
+			QAction* remove_dlc = remove_menu->addAction(tr("Delete &DLC"));
+			remove_dlc->setEnabled(!is_current_running_game);
+			connect(remove_dlc, &QAction::triggered, this, [this, serial, content_info]()
+			{
+				m_game_list_actions->SetContentList(game_list_actions::content_type::DLC, content_info);
+				m_game_list_actions->RemoveDLC(serial, true);
+			});
+		}
+
+		if (has_bucket(content_classifier::bucket::save_data))
+		{
+			QAction* remove_save_data = remove_menu->addAction(tr("Delete Sa&ve Data"));
+			remove_save_data->setEnabled(!is_current_running_game);
+			connect(remove_save_data, &QAction::triggered, this, [this, serial, content_info]()
+			{
+				m_game_list_actions->SetContentList(game_list_actions::content_type::SAVE_DATA, content_info);
+				m_game_list_actions->RemoveSaveData(serial, true);
+			});
+		}
 	}
 
 	if (!savestates_dir.empty())
@@ -802,6 +862,36 @@ void game_list_context_menu::show_multi_selection_context_menu(const std::vector
 	});
 
 	remove_menu->addSeparator();
+
+	QAction* remove_install_data = remove_menu->addAction(tr("&Delete Install Data"));
+	connect(remove_install_data, &QAction::triggered, this, [this, games]()
+	{
+		m_game_list_actions->BatchRemoveInstallData(games, true);
+	});
+
+	QAction* remove_patches = remove_menu->addAction(tr("&Delete Patches/Updates"));
+	connect(remove_patches, &QAction::triggered, this, [this, games]()
+	{
+		m_game_list_actions->BatchRemovePatches(games, true);
+	});
+
+	QAction* remove_dlc = remove_menu->addAction(tr("Delete &DLC"));
+	connect(remove_dlc, &QAction::triggered, this, [this, games]()
+	{
+		m_game_list_actions->BatchRemoveDLC(games, true);
+	});
+
+	QAction* remove_save_data = remove_menu->addAction(tr("Delete Sa&ve Data"));
+	connect(remove_save_data, &QAction::triggered, this, [this, games]()
+	{
+		m_game_list_actions->BatchRemoveSaveData(games, true);
+	});
+
+	QAction* remove_unknown_data = remove_menu->addAction(tr("Delete &Unclassified Title Data"));
+	connect(remove_unknown_data, &QAction::triggered, this, [this, games]()
+	{
+		m_game_list_actions->BatchRemoveUnknownData(games, true);
+	});
 
 	QAction* remove_savestates = remove_menu->addAction(tr("&Remove Savestates"));
 	connect(remove_savestates, &QAction::triggered, this, [this, games]()

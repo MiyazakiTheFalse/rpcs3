@@ -41,6 +41,28 @@ game_list_actions::~game_list_actions()
 {
 }
 
+namespace
+{
+	constexpr std::array<content_classifier::bucket, 5> g_ps3_bucket_order =
+	{
+		content_classifier::bucket::install_data,
+		content_classifier::bucket::patch_update_data,
+		content_classifier::bucket::dlc_addon_data,
+		content_classifier::bucket::save_data,
+		content_classifier::bucket::unknown,
+	};
+
+	std::set<std::string> get_bucket_paths(const game_list_actions::content_info& info, const std::string& serial, content_classifier::bucket bucket)
+	{
+		if (const auto serial_it = info.bucketed_path_list.find(serial); serial_it != info.bucketed_path_list.end())
+		{
+			if (const auto bucket_it = serial_it->second.find(bucket); bucket_it != serial_it->second.end())
+				return bucket_it->second;
+		}
+		return {};
+	}
+}
+
 void game_list_actions::SetContentList(u16 content_types, const content_info& content_info)
 {
 	m_content_info = content_info;
@@ -133,16 +155,7 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 		total_data_size += size;
 	}
 
-	const std::array<content_classifier::bucket, 5> bucket_order =
-	{
-		content_classifier::bucket::install_data,
-		content_classifier::bucket::patch_update_data,
-		content_classifier::bucket::dlc_addon_data,
-		content_classifier::bucket::save_data,
-		content_classifier::bucket::unknown,
-	};
-
-	if (content_info.is_single_selection)
+		if (content_info.is_single_selection)
 	{
 		GameInfo& current_game = games[0]->info;
 		text = tr("%0 - %1\n").arg(QString::fromStdString(current_game.serial)).arg(QString::fromStdString(current_game.name));
@@ -157,7 +170,7 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 		if (const auto it = content_info.bucketed_path_list.find(current_game.serial); it != content_info.bucketed_path_list.end())
 		{
 			text += tr("\nContent Data Info:\n");
-			for (const auto bucket : bucket_order)
+			for (const auto bucket : g_ps3_bucket_order)
 			{
 				if (const auto bit = it->second.find(bucket); bit != it->second.end())
 				{
@@ -197,7 +210,7 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 		if (!content_info.bucketed_path_list.empty())
 		{
 			text += tr("\nContent Data Info:\n");
-			for (const auto bucket : bucket_order)
+			for (const auto bucket : g_ps3_bucket_order)
 			{
 				if (const auto it = content_info.bucketed_sizes.find(bucket); it != content_info.bucketed_sizes.end() && it->second)
 				{
@@ -262,7 +275,13 @@ void game_list_actions::ShowRemoveGameDialog(const std::vector<game_info>& games
 	QString text = content_info.info;
 
 	QCheckBox* disc = new QCheckBox(tr("Remove title from game list (Disc Game path is not removed!)"));
-	QCheckBox* caches = new QCheckBox(tr("Remove caches and custom configs"));
+	QCheckBox* shader_cpu_caches = new QCheckBox(tr("Delete shader/CPU cache"));
+	QCheckBox* install_data = new QCheckBox(tr("Delete install data (%0)").arg(gui::utils::format_byte_size(content_info.bucketed_sizes[content_classifier::bucket::install_data])));
+	QCheckBox* patches = new QCheckBox(tr("Delete patches/updates (%0)").arg(gui::utils::format_byte_size(content_info.bucketed_sizes[content_classifier::bucket::patch_update_data])));
+	QCheckBox* dlc = new QCheckBox(tr("Delete DLC (%0)").arg(gui::utils::format_byte_size(content_info.bucketed_sizes[content_classifier::bucket::dlc_addon_data])));
+	QCheckBox* save_data = new QCheckBox(tr("Delete save data (%0)").arg(gui::utils::format_byte_size(content_info.bucketed_sizes[content_classifier::bucket::save_data])));
+	QCheckBox* unknown_data = new QCheckBox(tr("Delete unclassified title data (%0)").arg(gui::utils::format_byte_size(content_info.bucketed_sizes[content_classifier::bucket::unknown])));
+	QCheckBox* custom_configs = new QCheckBox(tr("Remove custom configs"));
 	QCheckBox* icons = new QCheckBox(tr("Remove icons and shortcuts"));
 	QCheckBox* savestate = new QCheckBox(tr("Remove savestates"));
 	QCheckBox* captures = new QCheckBox(tr("Remove captures"));
@@ -278,9 +297,8 @@ void game_list_actions::ShowRemoveGameDialog(const std::vector<game_info>& games
 		}
 		else
 		{
-			if (!content_info.is_single_selection) // Multi selection
+			if (!content_info.is_single_selection)
 				disc->setToolTip(tr("Title located under auto-detection VFS \"games\" folder cannot be removed"));
-
 			disc->setChecked(true);
 		}
 	}
@@ -290,17 +308,10 @@ void game_list_actions::ShowRemoveGameDialog(const std::vector<game_info>& games
 		disc->setVisible(false);
 	}
 
-	if (content_info.bucketed_path_list.size()) // If a path is present
-	{
-		text += tr("\nPermanently remove %0 and selected (optional) contents from drive?\n")
-	            .arg((content_info.disc_list.size() || !content_info.is_single_selection) ? tr("Game Data") : games[0]->localized_category);
-	}
-	else
-	{
-		text += tr("\nPermanently remove selected (optional) contents from drive?\n");
-	}
+	text += tr("\nPermanently remove selected content buckets from drive?\n");
 
-	caches->setChecked(true);
+	shader_cpu_caches->setChecked(true);
+	custom_configs->setChecked(true);
 	icons->setChecked(true);
 
 	QMessageBox mb(QMessageBox::Question, tr("Confirm Removal"), text, QMessageBox::Yes | QMessageBox::No, m_game_list_frame);
@@ -310,58 +321,50 @@ void game_list_actions::ShowRemoveGameDialog(const std::vector<game_info>& games
 	int row, column, rowSpan, columnSpan;
 
 	grid->getItemPosition(grid->indexOf(disc), &row, &column, &rowSpan, &columnSpan);
-	grid->addWidget(caches, row + 3, column, rowSpan, columnSpan);
-	grid->addWidget(icons, row + 4, column, rowSpan, columnSpan);
-	grid->addWidget(savestate, row + 5, column, rowSpan, columnSpan);
-	grid->addWidget(captures, row + 6, column, rowSpan, columnSpan);
-	grid->addWidget(recordings, row + 7, column, rowSpan, columnSpan);
-	grid->addWidget(screenshots, row + 8, column, rowSpan, columnSpan);
+	grid->addWidget(shader_cpu_caches, row + 3, column, rowSpan, columnSpan);
+	grid->addWidget(install_data, row + 4, column, rowSpan, columnSpan);
+	grid->addWidget(patches, row + 5, column, rowSpan, columnSpan);
+	grid->addWidget(dlc, row + 6, column, rowSpan, columnSpan);
+	grid->addWidget(save_data, row + 7, column, rowSpan, columnSpan);
+	grid->addWidget(unknown_data, row + 8, column, rowSpan, columnSpan);
+	grid->addWidget(custom_configs, row + 9, column, rowSpan, columnSpan);
+	grid->addWidget(icons, row + 10, column, rowSpan, columnSpan);
+	grid->addWidget(savestate, row + 11, column, rowSpan, columnSpan);
+	grid->addWidget(captures, row + 12, column, rowSpan, columnSpan);
+	grid->addWidget(recordings, row + 13, column, rowSpan, columnSpan);
+	grid->addWidget(screenshots, row + 14, column, rowSpan, columnSpan);
 
 	if (mb.exec() != QMessageBox::Yes)
 		return;
 
-	// Remove data path in "dev_hdd0/game" folder (if any) and lock file in "dev_hdd0/game/＄locks" folder (if any)
-	u16 content_types = DATA | LOCKS;
+	u16 content_types = LOCKS;
 
-	// Remove serials (title id) in "games.yml" file (if any)
-	if (disc->isChecked())
-		content_types |= DISC;
-
-	// Remove caches in "cache" and "dev_hdd1/caches" folders (if any) and custom configs in "config/custom_config" folder (if any)
-	if (caches->isChecked())
-		content_types |= CACHES | CUSTOM_CONFIG;
-
-	// Remove icons in "Icons/game_icons" folder (if any) and
-	// shortcuts in "games/shortcuts" folder and from desktop / start menu (if any)
-	if (icons->isChecked())
-		content_types |= ICONS | SHORTCUTS;
-
-	if (savestate->isChecked())
-		content_types |= SAVESTATES;
-
-	if (captures->isChecked())
-		content_types |= CAPTURES;
-
-	if (recordings->isChecked())
-		content_types |= RECORDINGS;
-
-	if (screenshots->isChecked())
-		content_types |= SCREENSHOTS;
+	if (disc->isChecked()) content_types |= DISC;
+	if (shader_cpu_caches->isChecked()) content_types |= CACHES;
+	if (install_data->isChecked()) content_types |= INSTALL_DATA;
+	if (patches->isChecked()) content_types |= PATCHES;
+	if (dlc->isChecked()) content_types |= DLC;
+	if (save_data->isChecked()) content_types |= SAVE_DATA;
+	if (unknown_data->isChecked()) content_types |= UNKNOWN_DATA;
+	if (custom_configs->isChecked()) content_types |= CUSTOM_CONFIG;
+	if (icons->isChecked()) content_types |= ICONS | SHORTCUTS;
+	if (savestate->isChecked()) content_types |= SAVESTATES;
+	if (captures->isChecked()) content_types |= CAPTURES;
+	if (recordings->isChecked()) content_types |= RECORDINGS;
+	if (screenshots->isChecked()) content_types |= SCREENSHOTS;
 
 	SetContentList(content_types, content_info);
 
-	if (content_info.is_single_selection) // Single selection
+	if (content_info.is_single_selection)
 	{
 		if (!RemoveContentList(games[0]->info.serial))
 		{
-			QMessageBox::critical(m_game_list_frame, tr("Failure!"), caches->isChecked()
-				? tr("Failed to remove %0 from drive!\nCaches and custom configs have been left intact.").arg(QString::fromStdString(games[0]->info.name))
-				: tr("Failed to remove %0 from drive!").arg(QString::fromStdString(games[0]->info.name)));
-
+			QMessageBox::critical(m_game_list_frame, tr("Failure!"),
+				tr("Failed to remove %0 from drive!").arg(QString::fromStdString(games[0]->info.name)));
 			return;
 		}
 	}
-	else // Multi selection
+	else
 	{
 		BatchRemoveContentLists(games);
 	}
@@ -790,6 +793,51 @@ bool game_list_actions::RemoveAllCaches(const std::string& serial, bool is_inter
 	return success;
 }
 
+bool game_list_actions::RemoveInstallData(const std::string& serial, bool is_interactive)
+{
+	if (!ValidateRemoval(serial, fs::get_config_dir(), "install data", is_interactive))
+		return true;
+
+	const std::set<std::string> paths = get_bucket_paths(m_content_info, serial, content_classifier::bucket::install_data);
+	return RemoveContentPathList(paths, "install data") == paths.size();
+}
+
+bool game_list_actions::RemovePatches(const std::string& serial, bool is_interactive)
+{
+	if (!ValidateRemoval(serial, fs::get_config_dir(), "patches/updates", is_interactive))
+		return true;
+
+	const std::set<std::string> paths = get_bucket_paths(m_content_info, serial, content_classifier::bucket::patch_update_data);
+	return RemoveContentPathList(paths, "patches/updates") == paths.size();
+}
+
+bool game_list_actions::RemoveDLC(const std::string& serial, bool is_interactive)
+{
+	if (!ValidateRemoval(serial, fs::get_config_dir(), "DLC", is_interactive))
+		return true;
+
+	const std::set<std::string> paths = get_bucket_paths(m_content_info, serial, content_classifier::bucket::dlc_addon_data);
+	return RemoveContentPathList(paths, "DLC") == paths.size();
+}
+
+bool game_list_actions::RemoveSaveData(const std::string& serial, bool is_interactive)
+{
+	if (!ValidateRemoval(serial, fs::get_config_dir(), "save data", is_interactive))
+		return true;
+
+	const std::set<std::string> paths = get_bucket_paths(m_content_info, serial, content_classifier::bucket::save_data);
+	return RemoveContentPathList(paths, "save data") == paths.size();
+}
+
+bool game_list_actions::RemoveUnknownData(const std::string& serial, bool is_interactive)
+{
+	if (!ValidateRemoval(serial, fs::get_config_dir(), "unclassified title data", is_interactive))
+		return true;
+
+	const std::set<std::string> paths = get_bucket_paths(m_content_info, serial, content_classifier::bucket::unknown);
+	return RemoveContentPathList(paths, "unclassified title data") == paths.size();
+}
+
 bool game_list_actions::RemoveContentList(const std::string& serial, bool is_interactive)
 {
 	// Just used for confirmation, if requested. Folder returned by fs::get_config_dir() is always present!
@@ -803,21 +851,30 @@ bool game_list_actions::RemoveContentList(const std::string& serial, bool is_int
 
 	u16 content_types = m_content_info.content_types;
 
-	// Remove data path in "dev_hdd0/game" folder (if any)
-	if (content_types & DATA)
+	if ((content_types & INSTALL_DATA) && !RemoveInstallData(serial))
 	{
-		if (const auto it = m_content_info.bucketed_path_list.find(serial); it != m_content_info.bucketed_path_list.cend())
-		{
-			const std::set<std::string> paths = FlattenPathList(it->second);
-			if (RemoveContentPathList(paths, "data") != paths.size())
-			{
-				if (m_content_info.clear_on_finish)
-					ClearContentList(); // Clear only the content's info
-
-				// Skip the removal of the remaining selected contents in case some data paths could not be removed
-				return false;
-			}
-		}
+		if (m_content_info.clear_on_finish) ClearContentList();
+		return false;
+	}
+	if ((content_types & PATCHES) && !RemovePatches(serial))
+	{
+		if (m_content_info.clear_on_finish) ClearContentList();
+		return false;
+	}
+	if ((content_types & DLC) && !RemoveDLC(serial))
+	{
+		if (m_content_info.clear_on_finish) ClearContentList();
+		return false;
+	}
+	if ((content_types & SAVE_DATA) && !RemoveSaveData(serial))
+	{
+		if (m_content_info.clear_on_finish) ClearContentList();
+		return false;
+	}
+	if ((content_types & UNKNOWN_DATA) && !RemoveUnknownData(serial))
+	{
+		if (m_content_info.clear_on_finish) ClearContentList();
+		return false;
 	}
 
 	// Add serial (title id) to the list of serials to be removed in "games.yml" file (if any)
@@ -1395,6 +1452,36 @@ void game_list_actions::BatchRemoveAllCaches(const std::vector<game_info>& games
 		{
 			game_list_log.notice("Cache Batch Removal was canceled. %d/%d caches cleared", removed, total);
 		}, nullptr, false);
+}
+
+void game_list_actions::BatchRemoveInstallData(const std::vector<game_info>& games, bool is_interactive)
+{
+	SetContentList(INSTALL_DATA, GetContentInfo(games.empty() ? m_game_list_frame->GetGameInfo() : games));
+	BatchRemoveContentLists(games, is_interactive);
+}
+
+void game_list_actions::BatchRemovePatches(const std::vector<game_info>& games, bool is_interactive)
+{
+	SetContentList(PATCHES, GetContentInfo(games.empty() ? m_game_list_frame->GetGameInfo() : games));
+	BatchRemoveContentLists(games, is_interactive);
+}
+
+void game_list_actions::BatchRemoveDLC(const std::vector<game_info>& games, bool is_interactive)
+{
+	SetContentList(DLC, GetContentInfo(games.empty() ? m_game_list_frame->GetGameInfo() : games));
+	BatchRemoveContentLists(games, is_interactive);
+}
+
+void game_list_actions::BatchRemoveSaveData(const std::vector<game_info>& games, bool is_interactive)
+{
+	SetContentList(SAVE_DATA, GetContentInfo(games.empty() ? m_game_list_frame->GetGameInfo() : games));
+	BatchRemoveContentLists(games, is_interactive);
+}
+
+void game_list_actions::BatchRemoveUnknownData(const std::vector<game_info>& games, bool is_interactive)
+{
+	SetContentList(UNKNOWN_DATA, GetContentInfo(games.empty() ? m_game_list_frame->GetGameInfo() : games));
+	BatchRemoveContentLists(games, is_interactive);
 }
 
 void game_list_actions::BatchRemoveContentLists(const std::vector<game_info>& games, bool is_interactive)

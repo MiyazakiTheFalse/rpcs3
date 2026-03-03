@@ -23,16 +23,20 @@ public:
 	{
 		NO_CONTENT    = 0,
 		DISC          = (1 << 0),
-		DATA          = (1 << 1),
-		LOCKS         = (1 << 2),
-		CACHES        = (1 << 3),
-		CUSTOM_CONFIG = (1 << 4),
-		ICONS         = (1 << 5),
-		SHORTCUTS     = (1 << 6),
-		SAVESTATES    = (1 << 7),
-		CAPTURES      = (1 << 8),
-		RECORDINGS    = (1 << 9),
-		SCREENSHOTS   = (1 << 10)
+		INSTALL_DATA  = (1 << 1),
+		PATCHES       = (1 << 2),
+		DLC           = (1 << 3),
+		SAVE_DATA     = (1 << 4),
+		UNKNOWN_DATA  = (1 << 5),
+		LOCKS         = (1 << 6),
+		CACHES        = (1 << 7),
+		CUSTOM_CONFIG = (1 << 8),
+		ICONS         = (1 << 9),
+		SHORTCUTS     = (1 << 10),
+		SAVESTATES    = (1 << 11),
+		CAPTURES      = (1 << 12),
+		RECORDINGS    = (1 << 13),
+		SCREENSHOTS   = (1 << 14)
 	};
 
 	struct content_info
@@ -79,6 +83,11 @@ public:
 	bool RemoveSPUCache(const std::string& serial, bool is_interactive = false);
 	bool RemoveHDD1Cache(const std::string& serial, bool is_interactive = false);
 	bool RemoveAllCaches(const std::string& serial, bool is_interactive = false);
+	bool RemoveInstallData(const std::string& serial, bool is_interactive = false);
+	bool RemovePatches(const std::string& serial, bool is_interactive = false);
+	bool RemoveDLC(const std::string& serial, bool is_interactive = false);
+	bool RemoveSaveData(const std::string& serial, bool is_interactive = false);
+	bool RemoveUnknownData(const std::string& serial, bool is_interactive = false);
 	bool RemoveContentList(const std::string& serial, bool is_interactive = false);
 
 	void BatchCreateCPUCaches(const std::vector<game_info>& games = {}, bool is_fast_compilation = false, bool is_interactive = false);
@@ -89,6 +98,11 @@ public:
 	void BatchRemoveSPUCaches(const std::vector<game_info>& games = {}, bool is_interactive = false);
 	void BatchRemoveHDD1Caches(const std::vector<game_info>& games = {}, bool is_interactive = false);
 	void BatchRemoveAllCaches(const std::vector<game_info>& games = {}, bool is_interactive = false);
+	void BatchRemoveInstallData(const std::vector<game_info>& games = {}, bool is_interactive = false);
+	void BatchRemovePatches(const std::vector<game_info>& games = {}, bool is_interactive = false);
+	void BatchRemoveDLC(const std::vector<game_info>& games = {}, bool is_interactive = false);
+	void BatchRemoveSaveData(const std::vector<game_info>& games = {}, bool is_interactive = false);
+	void BatchRemoveUnknownData(const std::vector<game_info>& games = {}, bool is_interactive = false);
 	void BatchRemoveContentLists(const std::vector<game_info>& games = {}, bool is_interactive = false);
 
 	static bool RemoveContentPath(const std::string& path, const std::string& desc);
