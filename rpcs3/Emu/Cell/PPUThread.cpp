@@ -4684,6 +4684,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// where N is the total amunt of JIT instances
 	// Subject to change
 	constexpr u32 c_moudles_per_jit = 100;
+	constexpr std::string_view s_ppu_obj_name_version = "v8-kusa";
+	constexpr std::string_view s_ppu_manifest_format_version = "ppu-obj-v1";
+
+	auto get_ppu_cache_compatibility_tuple = []()
+	{
+		const std::string backend_id = fmt::format("llvm-cpu=%s-greedy=%u", jit_compiler::cpu(g_cfg.core.llvm_cpu), g_cfg.core.ppu_llvm_greedy_mode ? 1u : 0u);
+		return rpcs3::cache::make_compatibility_tuple("ppu", backend_id);
+	};
 
 	std::shared_ptr<std::pair<u32, u32>> local_jit_bounds = std::make_shared<std::pair<u32, u32>>(u32{umax}, 0);
 
@@ -5180,7 +5188,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				settings += ppu_settings::contains_symbol_resolver; // Avoid invalidating all modules for this purpose
 
 			// Write version, hash, CPU, settings
-			fmt::append(obj_name, "v7-kusa-%s-%s-%s.obj", fmt::base57(output, 16), fmt::base57(settings), jit_compiler::cpu(g_cfg.core.llvm_cpu));
+			fmt::append(obj_name, "%s-%s-%s-%s.obj", s_ppu_obj_name_version, fmt::base57(output, 16), fmt::base57(settings), jit_compiler::cpu(g_cfg.core.llvm_cpu));
 		}
 
 		if (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped())
@@ -5332,7 +5340,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), "obj"); !cas.empty())
 						{
 							fs::file mf(cache_path + "manifest.index", fs::append + fs::create + fs::write);
-							mf.write(rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name));
+							mf.write(rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
 						}
 					}
 
