@@ -55,6 +55,45 @@ namespace rpcs3::cache
 		return fmt::format("%s-%s-%u.%u.%u-cpu%X.%X", os.type, os.arch, os.version_major, os.version_minor, os.version_patch, utils::get_cpu_family(), utils::get_cpu_model());
 	}
 
+	std::string make_platform_fields(std::initializer_list<compatibility_field> fields)
+	{
+		std::string result;
+		for (const auto& [key, value] : fields)
+		{
+			if (key.empty() || value.empty())
+			{
+				continue;
+			}
+
+			if (!result.empty())
+			{
+				result += ';';
+			}
+
+			fmt::append(result, "%s=%s", key, value);
+		}
+
+		return result;
+	}
+
+	std::string make_rsx_platform_fields(std::string_view renderer_backend, std::initializer_list<compatibility_field> platform_fields)
+	{
+		std::string fields = make_platform_fields(platform_fields);
+		if (!fields.empty())
+		{
+			fields += ';';
+		}
+
+		fmt::append(fields, "os=%s", get_platform_cache_id());
+
+		if (!renderer_backend.empty())
+		{
+			fmt::append(fields, ";renderer=%s", renderer_backend);
+		}
+
+		return fields;
+	}
+
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields)
 	{
 		if (platform_fields.empty())

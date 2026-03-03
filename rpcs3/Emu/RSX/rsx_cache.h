@@ -232,10 +232,10 @@ namespace rsx
 
 	public:
 
-		shaders_cache(backend_storage& storage, std::string pipeline_class, std::string version_prefix_str = "v1")
+		shaders_cache(backend_storage& storage, std::string pipeline_class, std::string version_prefix_str = "v1", std::string platform_fields = {})
 			: version_prefix(std::move(version_prefix_str))
 			, pipeline_class_name(std::move(pipeline_class))
-			, compatibility_tuple(rpcs3::cache::make_compatibility_tuple("rsx", pipeline_class_name))
+			, compatibility_tuple(rpcs3::cache::make_compatibility_tuple("rsx", pipeline_class_name, platform_fields))
 			, raw_program_format_version("rsx-raw-program-v2")
 			, m_storage(storage)
 		{

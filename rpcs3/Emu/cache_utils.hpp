@@ -3,7 +3,9 @@
 #include <string>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "util/types.hpp"
 
@@ -50,6 +52,9 @@ namespace rpcs3::cache
 	std::string get_ppu_cache();
 	std::string get_shared_cas_root();
 	std::string get_platform_cache_id();
+	using compatibility_field = std::pair<std::string_view, std::string_view>;
+	std::string make_platform_fields(std::initializer_list<compatibility_field> fields);
+	std::string make_rsx_platform_fields(std::string_view renderer_backend, std::initializer_list<compatibility_field> platform_fields = {});
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields = {});
 	std::string_view to_manifest_artifact_name(cas_artifact_type artifact);
 	cas_cache_tier get_default_tier_for_artifact(cas_artifact_type artifact);
