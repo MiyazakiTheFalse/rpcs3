@@ -11,6 +11,7 @@
 #include "Emu/RSX/Host/MM.h"
 #include "Emu/RSX/Host/RSXDMAWriter.h"
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
+#include "Emu/cache_utils.hpp"
 
 [[noreturn]] extern void report_fatal_error(std::string_view _text, bool is_html = false, bool include_help_text = true);
 
@@ -144,6 +145,18 @@ void GLGSRender::on_init_thread()
 		{"device", gl_renderer ? gl_renderer : "unknown"},
 		{"driver", gl_version ? gl_version : "unknown"},
 	});
+	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "opengl", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
+	rpcs3::cache::run_match_options run_match_options{};
+	run_match_options.required_backend = "opengl";
+	const auto reuse_match = rpcs3::cache::find_best_run_match(Emu.GetTitleID(), settings_fingerprint, cache_platform_fields, run_match_options);
+	if (!reuse_match.run_id.empty())
+	{
+		rsx_log.notice("RSX catalog candidate for OpenGL shader cache: %s (score=%lld, full_reuse=%s, partial_rebuild=%s)", reuse_match.run_id, reuse_match.score, reuse_match.full_reuse ? "true" : "false", reuse_match.partial_rebuild ? "true" : "false");
+		for (const auto& mismatch : reuse_match.mismatches)
+		{
+			rsx_log.notice("RSX catalog mismatch (%s): %s", mismatch.hard_constraint ? "hard" : "soft", mismatch.detail);
+		}
+	}
 	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
 	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 
