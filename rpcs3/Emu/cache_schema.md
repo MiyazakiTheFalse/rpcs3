@@ -9,6 +9,20 @@ This document defines the cross-domain compatibility tuple used for cache artifa
   - `schema=<N>|domain=<ppu|spu|rsx>|backend=<compiler/backend id>|platform=<platform fingerprint>`
 - The tuple is produced by `rpcs3::cache::make_compatibility_tuple(...)` and stored in manifest records where applicable.
 
+## Manifest record schema
+
+Manifest lines are pipe-separated:
+
+- Legacy format: `<artifact_type>|<hash>|<metadata>|<compatibility_tuple>|<format_version>`
+- Extended format: `<artifact_type>|<hash>|<metadata>|<compatibility_tuple>|<format_version>|codec=<id>|tier=<id>`
+
+`codec` and `tier` are optional for backward compatibility, but are required for the latest per-artifact manifest versions listed below.
+
+- `codec` ids map to `rpcs3::cache::cas_codec`: `1=none`, `2=lz4`, `3=zstd`.
+- `tier` ids map to `rpcs3::cache::cas_cache_tier`: `1=hot`, `2=warm`, `3=cold`.
+
+Writers must record the intended artifact placement policy (`tier`) and the effective storage codec (`codec`).
+
 ## Domain/backend identity
 
 ### PPU
@@ -41,9 +55,9 @@ This document defines the cross-domain compatibility tuple used for cache artifa
 
 ## Artifact serialization versions
 
-- **SPU cache blob**: `spu-bin-v2`
-- **PPU object manifest entries**: `ppu-obj-v1`
-- **RSX raw program index entries**: `rsx-raw-program-v1`
+- **SPU cache blob manifest entries**: `spu-bin-v3` (fallback accepted: `spu-bin-v2`)
+- **PPU object manifest entries**: `ppu-obj-v2`
+- **RSX raw program index entries**: `rsx-raw-program-v2` (fallback accepted: `rsx-raw-program-v1`)
 - **RSX pipeline binary payload**: `serialization_version = 1` in `pipeline_data` + versioned path prefix (`v1.95` today)
 
 ## Manifest validation gate policy
@@ -54,9 +68,14 @@ Before reusing manifest entries:
 2. Check artifact type.
 3. Check compatibility tuple equality.
 4. Check per-artifact serialization/format version.
-5. Only then fetch blob from CAS.
+5. For new-format records, check `codec` and `tier` match expected policy.
+6. Only then fetch blob from CAS.
 
-Mismatched entries are rejected.
+Compatibility behavior:
+
+- New manifest versions require codec/tier to match.
+- Older versions are still accepted through explicit fallback checks to avoid cache invalidation storms during rolling upgrades.
+- CAS blobs stay content-addressed, so mixed old/new manifests can safely coexist.
 
 ## CAS retention policy
 

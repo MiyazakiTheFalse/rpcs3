@@ -8,7 +8,6 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Crypto/sha1.h"
 
-#include <array>
 #include <cstring>
 #include <zstd.h>
 
@@ -457,7 +456,7 @@ namespace rpcs3::cache
 		return true;
 	}
 
-	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version)
+	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version, cas_codec codec, cas_cache_tier tier)
 	{
 		std::string record = fmt::format("%s|%s", artifact_type, hash_key);
 		if (!metadata.empty())
@@ -475,6 +474,26 @@ namespace rpcs3::cache
 			record += "|";
 			record += format_version;
 		}
+
+		if (codec != cas_codec::auto_select)
+		{
+			cas_codec manifest_codec = codec;
+#if !RPCS3_CAS_HAS_LZ4
+			if (manifest_codec == cas_codec::lz4)
+			{
+				manifest_codec = cas_codec::zstd;
+			}
+#endif
+			record += "|codec=";
+			record += std::to_string(static_cast<u8>(manifest_codec));
+		}
+
+		if (tier != cas_cache_tier::auto_select)
+		{
+			record += "|tier=";
+			record += std::to_string(static_cast<u8>(tier));
+		}
+
 		record += "\n";
 		return record;
 	}
@@ -504,32 +523,47 @@ namespace rpcs3::cache
 
 		out.hash_key = std::string(line.substr(p0 + 1, p1 - p0 - 1));
 
-		usz prev = p1;
-		std::array<std::string*, 3> tails = { &out.metadata, &out.compatibility_tuple, &out.format_version };
-		for (std::string* target : tails)
+		std::vector<std::string_view> tails;
+		tails.reserve(8);
+		for (usz prev = p1; prev != umax;)
 		{
-			if (prev == umax)
-			{
-				break;
-			}
-
 			const usz next = line.find('|', prev + 1);
 			if (next == umax)
 			{
-				*target = std::string(line.substr(prev + 1));
-				prev = umax;
+				tails.emplace_back(line.substr(prev + 1));
+				break;
 			}
-			else
+
+			tails.emplace_back(line.substr(prev + 1, next - prev - 1));
+			prev = next;
+		}
+
+		if (!tails.empty()) out.metadata = std::string(tails[0]);
+		if (tails.size() > 1) out.compatibility_tuple = std::string(tails[1]);
+		if (tails.size() > 2) out.format_version = std::string(tails[2]);
+
+		for (usz i = 3; i < tails.size(); ++i)
+		{
+			const auto part = tails[i];
+			if (const usz eq = part.find('='); eq != umax)
 			{
-				*target = std::string(line.substr(prev + 1, next - prev - 1));
-				prev = next;
+				const auto key = part.substr(0, eq);
+				const auto value = part.substr(eq + 1);
+				if (key == "codec")
+				{
+					out.codec = std::string(value);
+				}
+				else if (key == "tier")
+				{
+					out.tier = std::string(value);
+				}
 			}
 		}
 
 		return true;
 	}
 
-	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version)
+	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec, cas_cache_tier expected_tier)
 	{
 		if (rec.artifact_type != expected_artifact_type)
 		{
@@ -542,6 +576,30 @@ namespace rpcs3::cache
 		}
 
 		if (!expected_format_version.empty() && rec.format_version != expected_format_version)
+		{
+			return false;
+		}
+
+		if (expected_codec != cas_codec::auto_select)
+		{
+			if (rec.codec.empty() || rec.codec != std::to_string(static_cast<u8>(expected_codec)))
+			{
+				return false;
+			}
+		}
+		else if (!rec.codec.empty() && rec.codec != std::to_string(static_cast<u8>(cas_codec::none)) && rec.codec != std::to_string(static_cast<u8>(cas_codec::lz4)) && rec.codec != std::to_string(static_cast<u8>(cas_codec::zstd)))
+		{
+			return false;
+		}
+
+		if (expected_tier != cas_cache_tier::auto_select)
+		{
+			if (rec.tier.empty() || rec.tier != std::to_string(static_cast<u8>(expected_tier)))
+			{
+				return false;
+			}
+		}
+		else if (!rec.tier.empty() && rec.tier != std::to_string(static_cast<u8>(cas_cache_tier::hot)) && rec.tier != std::to_string(static_cast<u8>(cas_cache_tier::warm)) && rec.tier != std::to_string(static_cast<u8>(cas_cache_tier::cold)))
 		{
 			return false;
 		}

@@ -622,7 +622,7 @@ static std::string get_spu_cache_compatibility_tuple()
 	return rpcs3::cache::make_compatibility_tuple("spu", backend_id);
 }
 
-static constexpr std::string_view s_spu_manifest_format_version = "spu-bin-v2";
+static constexpr std::string_view s_spu_manifest_format_version = "spu-bin-v3";
 
 std::deque<spu_program> spu_cache::get()
 {
@@ -722,7 +722,7 @@ void spu_cache::add(const spu_program& func)
 		{
 			const std::string filename = get_spu_cache_filename();
 			rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
-				rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
+				rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot));
 		}
 	}
 }
@@ -782,7 +782,8 @@ void spu_cache::initialize(bool build_existing_cache)
 				continue;
 			}
 
-			if (!rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, s_spu_manifest_format_version))
+			if (!rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, s_spu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot)
+				&& !rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, "spu-bin-v2"))
 			{
 				continue;
 			}
