@@ -145,20 +145,20 @@ void fmt_class_string<audio_channel_layout>::format(std::string& out, u64 arg)
 }
 
 template <>
-void fmt_class_string<audio_profile>::format(std::string& out, u64 arg)
+void fmt_class_string<audio_latency_profile>::format(std::string& out, u64 arg)
 {
-	format_enum(out, arg, [](audio_profile value)
+	format_enum(out, arg, [](audio_latency_profile value)
 	{
 		switch (value)
 		{
-		case audio_profile::manual: return "Manual";
-		case audio_profile::accurate: return "Accurate";
-		case audio_profile::low_latency: return "Low Latency";
+		case audio_latency_profile::accurate: return "Accurate";
+		case audio_latency_profile::low_latency: return "Low-latency";
 		}
 
 		return unknown;
 	});
 }
+
 
 template <>
 void fmt_class_string<detail_level>::format(std::string& out, u64 arg)
