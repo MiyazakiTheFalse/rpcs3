@@ -15,6 +15,7 @@
 
 #include "Input/pad_thread.h"
 
+#include <array>
 #include <QApplication>
 #include <QCheckBox>
 #include <QtConcurrent>
@@ -76,10 +77,7 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 
 	bool is_disc_game = false;
 	u64 total_disc_size = 0;
-	u64 total_data_size = 0;
 	QString text;
-
-	// Fill in content_info
 
 	content_info.is_single_selection = games.size() == 1;
 
@@ -88,103 +86,126 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 		GameInfo& current_game = game->info;
 
 		is_disc_game = QString::fromStdString(current_game.category) == cat::cat_disc_game;
-
-		// +1 if it's a disc game's path and it's present in the shared games folder
 		content_info.in_games_dir_count += (is_disc_game && Emu.IsPathInsideDir(current_game.path, rpcs3::utils::get_games_dir())) ? 1 : 0;
-
-		// Add the name to the content's name list for the related serial
 		content_info.name_list[current_game.serial].insert(current_game.name);
 
 		if (is_disc_game)
 		{
-			if (current_game.size_on_disk != umax) // If size was properly detected
+			if (current_game.size_on_disk != umax)
 				total_disc_size += current_game.size_on_disk;
 
-			// Add the serial to the disc list
 			content_info.disc_list.insert(current_game.serial);
 
-			// It could be an empty list for a disc game
-			std::set<std::string> data_dir_list = rpcs3::utils::get_dir_list(rpcs3::utils::get_hdd0_game_dir(), current_game.serial);
-
-			// Add the path list to the content's path list for the related serial
-			for (const auto& data_dir : data_dir_list)
+			for (const auto& data_dir : rpcs3::utils::get_dir_list(rpcs3::utils::get_hdd0_game_dir(), current_game.serial))
 			{
-				content_info.path_list[current_game.serial].insert(data_dir);
+				const auto bucket = content_classifier::classify_title_dir(data_dir, current_game.serial);
+				content_info.bucketed_path_list[current_game.serial][bucket].insert(data_dir);
 			}
 		}
 		else
 		{
-			// Add the path to the content's path list for the related serial
-			content_info.path_list[current_game.serial].insert(current_game.path);
+			auto bucket = content_classifier::classify_title_dir(current_game.path, current_game.serial);
+			if (bucket == content_classifier::bucket::unknown)
+			{
+				bucket = rpcs3::utils::classify_content_bucket(current_game.category, current_game.app_ver, "");
+			}
+			content_info.bucketed_path_list[current_game.serial][bucket].insert(current_game.path);
 		}
 	}
 
-	// Fill in text based on filled in content_info
+	for (const auto& [serial, bucketed_paths] : content_info.bucketed_path_list)
+	{
+		for (const auto& [bucket, paths] : bucketed_paths)
+		{
+			for (const auto& path : paths)
+			{
+				if (const u64 data_size = fs::get_dir_size(path, 1); data_size != umax)
+				{
+					content_info.bucketed_sizes[bucket] += data_size;
+				}
+			}
+		}
+	}
 
-	if (content_info.is_single_selection) // Single selection
+	u64 total_data_size = 0;
+	for (const auto& [bucket, size] : content_info.bucketed_sizes)
+	{
+		total_data_size += size;
+	}
+
+	const std::array<content_classifier::bucket, 5> bucket_order =
+	{
+		content_classifier::bucket::install_data,
+		content_classifier::bucket::patch_update_data,
+		content_classifier::bucket::dlc_addon_data,
+		content_classifier::bucket::save_data,
+		content_classifier::bucket::unknown,
+	};
+
+	if (content_info.is_single_selection)
 	{
 		GameInfo& current_game = games[0]->info;
-
 		text = tr("%0 - %1\n").arg(QString::fromStdString(current_game.serial)).arg(QString::fromStdString(current_game.name));
 
 		if (is_disc_game)
 		{
 			text += tr("\nDisc Game Info:\nPath: %0\n").arg(QString::fromStdString(current_game.path));
-
 			if (total_disc_size)
 				text += tr("Size: %0\n").arg(gui::utils::format_byte_size(total_disc_size));
 		}
 
-		// if a path is present (it could be an empty list for a disc game)
-		if (const auto& it = content_info.path_list.find(current_game.serial); it != content_info.path_list.end())
+		if (const auto it = content_info.bucketed_path_list.find(current_game.serial); it != content_info.bucketed_path_list.end())
 		{
-			text += tr("\n%0 Info:\n").arg(is_disc_game ? tr("Game Data") : games[0]->localized_category);
-
-			for (const auto& data_dir : it->second)
+			text += tr("\nContent Data Info:\n");
+			for (const auto bucket : bucket_order)
 			{
-				text += tr("Path: %0\n").arg(QString::fromStdString(data_dir));
-
-				if (const u64 data_size = fs::get_dir_size(data_dir, 1); data_size != umax)
-				{ // If size was properly detected
-					total_data_size += data_size;
-					text += tr("Size: %0\n").arg(gui::utils::format_byte_size(data_size));
+				if (const auto bit = it->second.find(bucket); bit != it->second.end())
+				{
+					u64 bucket_total = 0;
+					text += tr("\n%0:\n").arg(content_classifier::bucket_name(bucket));
+					for (const auto& data_dir : bit->second)
+					{
+						text += tr("Path: %0\n").arg(QString::fromStdString(data_dir));
+						if (const u64 data_size = fs::get_dir_size(data_dir, 1); data_size != umax)
+						{
+							bucket_total += data_size;
+							text += tr("Size: %0\n").arg(gui::utils::format_byte_size(data_size));
+						}
+					}
+					if (bit->second.size() > 1)
+						text += tr("Subtotal: %0\n").arg(gui::utils::format_byte_size(bucket_total));
 				}
 			}
-
-			if (it->second.size() > 1)
-				text += tr("Total size: %0\n").arg(gui::utils::format_byte_size(total_data_size));
+			text += tr("\nTotal content size: %0\n").arg(gui::utils::format_byte_size(total_data_size));
 		}
 	}
-	else // Multi selection
+	else
 	{
-		for (const auto& [serial, data_dir_list] : content_info.path_list)
-		{
-			for (const auto& data_dir : data_dir_list)
-			{
-				if (const u64 data_size = fs::get_dir_size(data_dir, 1); data_size != umax) // If size was properly detected
-					total_data_size += data_size;
-			}
-		}
-
 		text = tr("%0 selected games: %1 Disc Game - %2 not Disc Game\n").arg(games.size())
-				.arg(content_info.disc_list.size()).arg(games.size() - content_info.disc_list.size());
+			.arg(content_info.disc_list.size()).arg(games.size() - content_info.disc_list.size());
 
 		text += tr("\nDisc Game Info:\n");
-
 		if (content_info.disc_list.size() != content_info.in_games_dir_count)
 			text += tr("VFS unhosted: %0\n").arg(content_info.disc_list.size() - content_info.in_games_dir_count);
-
 		if (content_info.in_games_dir_count)
 			text += tr("VFS hosted: %0\n").arg(content_info.in_games_dir_count);
-
 		if (content_info.disc_list.size() != content_info.in_games_dir_count && content_info.in_games_dir_count)
 			text += tr("Total games: %0\n").arg((content_info.disc_list.size() - content_info.in_games_dir_count) + content_info.in_games_dir_count);
-
 		if (total_disc_size)
 			text += tr("Total size: %0\n").arg(gui::utils::format_byte_size(total_disc_size));
 
-		if (content_info.path_list.size())
-			text += tr("\nGame Data Info:\nTotal size: %0\n").arg(gui::utils::format_byte_size(total_data_size));
+		if (!content_info.bucketed_path_list.empty())
+		{
+			text += tr("\nContent Data Info:\n");
+			for (const auto bucket : bucket_order)
+			{
+				if (const auto it = content_info.bucketed_sizes.find(bucket); it != content_info.bucketed_sizes.end() && it->second)
+				{
+					text += tr("%0: %1\n").arg(content_classifier::bucket_name(bucket)).arg(gui::utils::format_byte_size(it->second));
+				}
+			}
+			text += tr("Total content size: %0\n").arg(gui::utils::format_byte_size(total_data_size));
+		}
 	}
 
 	u64 caches_size = 0;
@@ -196,32 +217,24 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 
 	for (const auto& [serial, name_list] : content_info.name_list)
 	{
-		// Main cache
 		if (const u64 size = fs::get_dir_size(rpcs3::utils::get_cache_dir_by_serial(serial), 1); size != umax)
 			caches_size += size;
-
-		// HDD1 cache
 		for (const auto& dir : rpcs3::utils::get_dir_list(rpcs3::utils::get_hdd1_cache_dir(), serial))
 		{
 			if (const u64 size = fs::get_dir_size(dir, 1); size != umax)
 				caches_size += size;
 		}
-
 		if (const u64 size = fs::get_dir_size(rpcs3::utils::get_icons_dir(serial), 1); size != umax)
 			icons_size += size;
-
 		if (const u64 size = fs::get_dir_size(rpcs3::utils::get_savestates_dir(serial), 1); size != umax)
 			savestates_size += size;
-
 		for (const auto& file : rpcs3::utils::get_file_list(rpcs3::utils::get_captures_dir(), serial))
 		{
 			if (fs::stat_t stat{}; fs::get_stat(file, stat))
 				captures_size += stat.size;
 		}
-
 		if (const u64 size = fs::get_dir_size(rpcs3::utils::get_recordings_dir(serial), 1); size != umax)
 			recordings_size += size;
-
 		if (const u64 size = fs::get_dir_size(rpcs3::utils::get_screenshots_dir(serial), 1); size != umax)
 			screenshots_size += size;
 	}
@@ -233,12 +246,10 @@ game_list_actions::content_info game_list_actions::GetContentInfo(const std::vec
 	text += tr("Recordings size: %0\n").arg(gui::utils::format_byte_size(recordings_size));
 	text += tr("Screenshots size: %0\n").arg(gui::utils::format_byte_size(screenshots_size));
 
-	// Retrieve disk space info on data path's drive
 	if (fs::device_stat stat{}; fs::statfs(rpcs3::utils::get_hdd0_dir(), stat))
 		text += tr("\nCurrent free disk space: %0\n").arg(gui::utils::format_byte_size(stat.avail_free));
 
 	content_info.info = text;
-
 	return content_info;
 }
 
@@ -279,7 +290,7 @@ void game_list_actions::ShowRemoveGameDialog(const std::vector<game_info>& games
 		disc->setVisible(false);
 	}
 
-	if (content_info.path_list.size()) // If a path is present
+	if (content_info.bucketed_path_list.size()) // If a path is present
 	{
 		text += tr("\nPermanently remove %0 and selected (optional) contents from drive?\n")
 	            .arg((content_info.disc_list.size() || !content_info.is_single_selection) ? tr("Game Data") : games[0]->localized_category);
@@ -795,9 +806,10 @@ bool game_list_actions::RemoveContentList(const std::string& serial, bool is_int
 	// Remove data path in "dev_hdd0/game" folder (if any)
 	if (content_types & DATA)
 	{
-		if (const auto it = m_content_info.path_list.find(serial); it != m_content_info.path_list.cend())
+		if (const auto it = m_content_info.bucketed_path_list.find(serial); it != m_content_info.bucketed_path_list.cend())
 		{
-			if (RemoveContentPathList(it->second, "data") != it->second.size())
+			const std::set<std::string> paths = FlattenPathList(it->second);
+			if (RemoveContentPathList(paths, "data") != paths.size())
 			{
 				if (m_content_info.clear_on_finish)
 					ClearContentList(); // Clear only the content's info
@@ -1590,6 +1602,22 @@ bool game_list_actions::RemoveContentPath(const std::string& path, const std::st
 	}
 
 	return true;
+}
+
+
+std::set<std::string> game_list_actions::FlattenPathList(const std::map<content_classifier::bucket, std::set<std::string>>& bucketed_paths)
+{
+	std::set<std::string> result;
+
+	for (const auto& [bucket, paths] : bucketed_paths)
+	{
+		for (const std::string& path : paths)
+		{
+			result.insert(path);
+		}
+	}
+
+	return result;
 }
 
 u32 game_list_actions::RemoveContentPathList(const std::set<std::string>& path_list, const std::string& desc)

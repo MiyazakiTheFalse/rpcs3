@@ -2,6 +2,7 @@
 #include "gui_settings.h"
 #include "downloader.h"
 #include "localized.h"
+#include "content_classifier.h"
 
 #include "Crypto/unpkg.h"
 #include "Loader/PSF.h"
@@ -271,6 +272,8 @@ compat::package_info game_compatibility::GetPkgInfo(const QString& pkg_path, gam
 	// We use "data_size" header as an approximation (a bit larger) for this purpose
 	info.data_size = reader.get_header().data_size.value();
 
+	const QString target_app_ver = QString::fromStdString(std::string(psf::get_string(psf, "TARGET_APP_VER")));
+
 	if (!info.category.isEmpty())
 	{
 		const Localized localized;
@@ -284,19 +287,20 @@ compat::package_info game_compatibility::GetPkgInfo(const QString& pkg_path, gam
 			info.local_cat = data_cat->second;
 		}
 
-		if (info.category == "GD")
+		const auto bucket = content_classifier::classify_pkg(info.category.toStdString(), info.version.toStdString(), target_app_ver.toStdString());
+
+		if (bucket == rpcs3::utils::content_bucket::patch_update_data)
 		{
-			// For now let's assume that PS3 Game Data packages are always updates or DLC.
-			// Update packages always seem to have an APP_VER, so let's say it's a DLC otherwise.
-			// Ideally this would simply be the package content type, but I am too lazy to implement this right now.
-			if (info.version.isEmpty())
-			{
-				info.type = compat::package_type::dlc;
-			}
-			else
-			{
-				info.type = compat::package_type::update;
-			}
+			info.type = compat::package_type::update;
+		}
+		else if (bucket == rpcs3::utils::content_bucket::dlc_addon_data)
+		{
+			info.type = compat::package_type::dlc;
+		}
+
+		if (bucket != rpcs3::utils::content_bucket::install_data && bucket != rpcs3::utils::content_bucket::save_data)
+		{
+			info.local_cat = content_classifier::bucket_name(bucket);
 		}
 	}
 

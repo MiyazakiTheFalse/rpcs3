@@ -2,6 +2,7 @@
 
 #include "gui_game_info.h"
 #include "shortcut_utils.h"
+#include "content_classifier.h"
 
 #include <QFuture>
 #include <QObject>
@@ -43,7 +44,8 @@ public:
 		u16 in_games_dir_count = 0;
 		QString info;
 		std::map<std::string, std::set<std::string>> name_list;
-		std::map<std::string, std::set<std::string>> path_list;
+		std::map<std::string, std::map<content_classifier::bucket, std::set<std::string>>> bucketed_path_list;
+		std::map<content_classifier::bucket, u64> bucketed_sizes;
 		std::set<std::string> disc_list;
 		std::set<std::string> removed_disc_list; // Filled in by RemoveContentList()
 	};
@@ -90,6 +92,7 @@ public:
 	void BatchRemoveContentLists(const std::vector<game_info>& games = {}, bool is_interactive = false);
 
 	static bool RemoveContentPath(const std::string& path, const std::string& desc);
+	static std::set<std::string> FlattenPathList(const std::map<content_classifier::bucket, std::set<std::string>>& bucketed_paths);
 	static u32 RemoveContentPathList(const std::set<std::string>& path_list, const std::string& desc);
 	static bool RemoveContentBySerial(const std::string& base_dir, const std::string& serial, const std::string& desc);
 

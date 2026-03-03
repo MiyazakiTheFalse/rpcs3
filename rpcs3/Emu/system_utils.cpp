@@ -11,6 +11,7 @@
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Crypto/unedat.h"
+#include "Loader/PSF.h"
 
 #include <charconv>
 #include <thread>
@@ -317,6 +318,90 @@ namespace rpcs3::utils
 		return dir_list;
 	}
 
+
+	static bool has_valid_title_id(std::string_view title_id)
+	{
+		if (title_id.size() != 9)
+		{
+			return false;
+		}
+
+		return std::all_of(title_id.begin(), title_id.end(), [](char ch)
+		{
+			return std::isalnum(static_cast<unsigned char>(ch)) != 0;
+		});
+	}
+
+	content_bucket classify_content_bucket(std::string_view category, std::string_view app_ver, std::string_view target_app_ver, std::optional<bool> bootable)
+	{
+		if (category == "SD" || category == "MS")
+		{
+			return content_bucket::save_data;
+		}
+
+		if (category == "GD")
+		{
+			if (!target_app_ver.empty())
+			{
+				return content_bucket::patch_update_data;
+			}
+
+			if (bootable.has_value() && !*bootable)
+			{
+				return content_bucket::dlc_addon_data;
+			}
+
+			if (!app_ver.empty())
+			{
+				return content_bucket::patch_update_data;
+			}
+
+			return content_bucket::unknown;
+		}
+
+		if (category == "HG" || category == "DG" || category == "2G" || category == "2P" || category == "PP" || category == "MN" || category == "PE" || category == "1P")
+		{
+			return content_bucket::install_data;
+		}
+
+		return content_bucket::unknown;
+	}
+
+	content_bucket classify_title_dir(const std::string& dir_path, const std::string& expected_title_id)
+	{
+		const std::string sfo_path = dir_path + "/PARAM.SFO";
+
+		if (!fs::is_file(sfo_path))
+		{
+			return content_bucket::unknown;
+		}
+
+		const auto [psf, errc] = psf::load(sfo_path);
+
+		if (errc != psf::error::ok)
+		{
+			return content_bucket::unknown;
+		}
+
+		const std::string title_id = std::string(psf::get_string(psf, "TITLE_ID", ""));
+
+		if (!has_valid_title_id(title_id))
+		{
+			return content_bucket::unknown;
+		}
+
+		if (!expected_title_id.empty() && title_id != expected_title_id)
+		{
+			return content_bucket::unknown;
+		}
+
+		const std::string category = std::string(psf::get_string(psf, "CATEGORY", ""));
+		const std::string app_ver = std::string(psf::get_string(psf, "APP_VER", ""));
+		const std::string target_app_ver = std::string(psf::get_string(psf, "TARGET_APP_VER", ""));
+		const bool has_eboot = fs::is_file(dir_path + "/USRDIR/EBOOT.BIN");
+
+		return classify_content_bucket(category, app_ver, target_app_ver, has_eboot);
+	}
 	std::set<std::string> get_file_list(const std::string& base_dir, const std::string& serial)
 	{
 		std::set<std::string> file_list;
