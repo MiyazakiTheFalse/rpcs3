@@ -106,6 +106,7 @@ public:
 		, m_write_tokens(m_profile.write_bytes_per_sec)
 		, m_last_refill_us(get_system_time())
 	{
+		refresh_profile();
 	}
 
 	scoped_request acquire_request(bool enabled)
@@ -146,6 +147,21 @@ public:
 	const hdd_io_shape_profile& profile() const
 	{
 		return m_profile;
+	}
+
+	void refresh_profile()
+	{
+		std::lock_guard lock(m_mutex);
+		m_profile.max_in_flight = std::max<u32>(1, static_cast<u32>(g_cfg.vfs.hdd_queue_depth));
+		m_profile.fixed_latency_us = static_cast<u32>(g_cfg.vfs.hdd_base_latency_us);
+		m_profile.random_latency_us = static_cast<u32>(g_cfg.vfs.hdd_random_extra_latency_us);
+		m_profile.read_bytes_per_sec = static_cast<u64>(g_cfg.vfs.hdd_read_mb_s) * 1024ull * 1024ull;
+		m_profile.write_bytes_per_sec = static_cast<u64>(g_cfg.vfs.hdd_write_mb_s) * 1024ull * 1024ull;
+
+		const u64 now_us = get_system_time();
+		m_last_refill_us = now_us;
+		m_read_tokens = m_profile.read_bytes_per_sec;
+		m_write_tokens = m_profile.write_bytes_per_sec;
 	}
 
 private:
@@ -201,7 +217,7 @@ private:
 		return static_cast<u64>(std::ceil(deficit * 1'000'000.0 / static_cast<double>(rate)));
 	}
 
-	const hdd_io_shape_profile m_profile{};
+	hdd_io_shape_profile m_profile{};
 	std::mutex m_mutex;
 	std::condition_variable m_cv;
 	u32 m_in_flight = 0;
@@ -212,6 +228,16 @@ private:
 };
 
 hdd_io_shaper g_hdd_io_shaper;
+
+u32 sys_fs_get_hdd_shape_queue_depth()
+{
+	return std::max<u32>(1, g_hdd_io_shaper.profile().max_in_flight);
+}
+
+void sys_fs_refresh_hdd_shape_profile()
+{
+	g_hdd_io_shaper.refresh_profile();
+}
 
 bool should_shape_hdd_io(const lv2_file& file)
 {

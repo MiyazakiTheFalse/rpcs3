@@ -1,9 +1,14 @@
 #include "stdafx.h"
 #include "Emu/IdManager.h"
+#include "Emu/system_config.h"
 
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_event.h"
 #include "sys_fs.h"
+
+#include <condition_variable>
+#include <mutex>
+#include <unordered_set>
 #include "util/shared_ptr.hpp"
 
 #include "sys_storage.h"
@@ -16,7 +21,92 @@ namespace
 	{
 		// This is probably wrong and should be assigned per fd or something
 		atomic_ptr<lv2_event_queue> asyncequeue;
+
+		std::mutex async_mutex;
+		std::condition_variable async_cv;
+		u32 in_flight = 0;
+		u64 next_token = 1;
+		std::unordered_set<u64> cancelled_tokens;
+
+		bool is_shaping_enabled() const
+		{
+			return g_cfg.vfs.emulate_ps3_hdd_mode;
+		}
+
+		u32 queue_depth() const
+		{
+			return std::max<u32>(1, sys_fs_get_hdd_shape_queue_depth());
+		}
 	};
+
+	enum class storage_async_op : u64
+	{
+		read = 1,
+		write = 2,
+		cancel = 3,
+	};
+
+	class storage_async_slot
+	{
+	public:
+		storage_async_slot(storage_manager& manager, bool enabled)
+			: m_manager(manager)
+			, m_enabled(enabled)
+		{
+			if (!m_enabled)
+			{
+				return;
+			}
+
+			std::unique_lock lock(m_manager.async_mutex);
+			m_manager.async_cv.wait(lock, [&]
+			{
+				return m_manager.in_flight < m_manager.queue_depth();
+			});
+			m_manager.in_flight++;
+		}
+
+		~storage_async_slot()
+		{
+			if (!m_enabled)
+			{
+				return;
+			}
+
+			std::lock_guard lock(m_manager.async_mutex);
+			m_manager.in_flight--;
+			m_manager.async_cv.notify_one();
+		}
+
+	private:
+		storage_manager& m_manager;
+		bool m_enabled = false;
+	};
+
+	void send_storage_async_event(storage_manager& manager, u64 token, storage_async_op op, error_code result)
+	{
+		if (auto q = manager.asyncequeue.load())
+		{
+			q->send(0, token, static_cast<u64>(op), static_cast<u64>(result));
+		}
+	}
+
+	u64 allocate_storage_token(storage_manager& manager)
+	{
+		std::lock_guard lock(manager.async_mutex);
+		return manager.next_token++;
+	}
+
+	bool is_storage_token_cancelled(storage_manager& manager, u64 token)
+	{
+		std::lock_guard lock(manager.async_mutex);
+		if (const auto it = manager.cancelled_tokens.find(token); it != manager.cancelled_tokens.end())
+		{
+			manager.cancelled_tokens.erase(it);
+			return true;
+		}
+		return false;
+	}
 }
 
 error_code sys_storage_open(u64 device, u64 mode, vm::ptr<u32> fd, u64 flags)
@@ -144,24 +234,67 @@ error_code sys_storage_async_send_device_command(u32 dev_handle, u64 cmd, vm::pt
 	return CELL_OK;
 }
 
-error_code sys_storage_async_read()
+error_code sys_storage_async_read(ppu_thread& ppu)
 {
-	sys_storage.todo("sys_storage_async_read()");
+	auto& manager = g_fxo->get<storage_manager>();
 
-	return CELL_OK;
+	const u32 fd = static_cast<u32>(ppu.gpr[3]);
+	const u32 mode = static_cast<u32>(ppu.gpr[4]);
+	const u32 start_sector = static_cast<u32>(ppu.gpr[5]);
+	const u32 num_sectors = static_cast<u32>(ppu.gpr[6]);
+	const vm::ptr<void> bounce_buf = vm::ptr<void>::make(static_cast<u32>(ppu.gpr[7]));
+	const vm::ptr<u32> sectors_read = vm::ptr<u32>::make(static_cast<u32>(ppu.gpr[8]));
+	const u64 flags = ppu.gpr[9];
+
+	const u64 token = allocate_storage_token(manager);
+	storage_async_slot slot(manager, manager.is_shaping_enabled());
+
+	error_code result = CELL_ECANCELED;
+	if (!is_storage_token_cancelled(manager, token))
+	{
+		result = sys_storage_read(fd, mode, start_sector, num_sectors, bounce_buf, sectors_read, flags);
+	}
+
+	send_storage_async_event(manager, token, storage_async_op::read, result);
+	return result;
 }
 
-error_code sys_storage_async_write()
+error_code sys_storage_async_write(ppu_thread& ppu)
 {
-	sys_storage.todo("sys_storage_async_write()");
+	auto& manager = g_fxo->get<storage_manager>();
 
-	return CELL_OK;
+	const u32 fd = static_cast<u32>(ppu.gpr[3]);
+	const u32 mode = static_cast<u32>(ppu.gpr[4]);
+	const u32 start_sector = static_cast<u32>(ppu.gpr[5]);
+	const u32 num_sectors = static_cast<u32>(ppu.gpr[6]);
+	const vm::ptr<void> data = vm::ptr<void>::make(static_cast<u32>(ppu.gpr[7]));
+	const vm::ptr<u32> sectors_wrote = vm::ptr<u32>::make(static_cast<u32>(ppu.gpr[8]));
+	const u64 flags = ppu.gpr[9];
+
+	const u64 token = allocate_storage_token(manager);
+	storage_async_slot slot(manager, manager.is_shaping_enabled());
+
+	error_code result = CELL_ECANCELED;
+	if (!is_storage_token_cancelled(manager, token))
+	{
+		result = sys_storage_write(fd, mode, start_sector, num_sectors, data, sectors_wrote, flags);
+	}
+
+	send_storage_async_event(manager, token, storage_async_op::write, result);
+	return result;
 }
 
-error_code sys_storage_async_cancel()
+error_code sys_storage_async_cancel(ppu_thread& ppu)
 {
-	sys_storage.todo("sys_storage_async_cancel()");
+	auto& manager = g_fxo->get<storage_manager>();
+	const u64 token = ppu.gpr[3];
 
+	{
+		std::lock_guard lock(manager.async_mutex);
+		manager.cancelled_tokens.emplace(token);
+	}
+
+	send_storage_async_event(manager, token, storage_async_op::cancel, CELL_ECANCELED);
 	return CELL_OK;
 }
 
@@ -448,10 +581,42 @@ error_code sys_storage_get_region_offset()
 	return CELL_OK;
 }
 
-error_code sys_storage_set_emulated_speed()
+error_code sys_storage_set_emulated_speed(ppu_thread& ppu)
 {
-	sys_storage.todo("sys_storage_set_emulated_speed()");
+	const u32 profile = static_cast<u32>(ppu.gpr[3]);
 
-	// todo: only debug kernel has this
-	return CELL_ENOSYS;
+	// Keep this lightweight: map profile id to existing runtime HDD shaping knobs.
+	switch (profile)
+	{
+	case 0:
+		g_cfg.vfs.emulate_ps3_hdd_mode.set(false);
+		break;
+	case 1: // conservative
+		g_cfg.vfs.emulate_ps3_hdd_mode.set(true);
+		g_cfg.vfs.hdd_base_latency_us.set(3000);
+		g_cfg.vfs.hdd_random_extra_latency_us.set(3000);
+		g_cfg.vfs.hdd_read_mb_s.set(32);
+		g_cfg.vfs.hdd_write_mb_s.set(16);
+		g_cfg.vfs.hdd_queue_depth.set(2);
+		break;
+	case 2: // default PS3-like
+		g_cfg.vfs.emulate_ps3_hdd_mode.set(true);
+		g_cfg.vfs.hdd_base_latency_us.set(1500);
+		g_cfg.vfs.hdd_random_extra_latency_us.set(2000);
+		g_cfg.vfs.hdd_read_mb_s.set(48);
+		g_cfg.vfs.hdd_write_mb_s.set(24);
+		g_cfg.vfs.hdd_queue_depth.set(4);
+		break;
+	default: // fast profile
+		g_cfg.vfs.emulate_ps3_hdd_mode.set(true);
+		g_cfg.vfs.hdd_base_latency_us.set(250);
+		g_cfg.vfs.hdd_random_extra_latency_us.set(500);
+		g_cfg.vfs.hdd_read_mb_s.set(100);
+		g_cfg.vfs.hdd_write_mb_s.set(60);
+		g_cfg.vfs.hdd_queue_depth.set(8);
+		break;
+	}
+
+	sys_fs_refresh_hdd_shape_profile();
+	return CELL_OK;
 }

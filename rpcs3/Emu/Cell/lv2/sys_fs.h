@@ -162,6 +162,10 @@ struct lv2_fs_mount_point
 extern lv2_fs_mount_point g_mp_sys_dev_hdd0;
 extern lv2_fs_mount_point g_mp_sys_no_device;
 
+// Runtime HDD shaping control used by sys_storage.
+u32 sys_fs_get_hdd_shape_queue_depth();
+void sys_fs_refresh_hdd_shape_profile();
+
 struct lv2_fs_mount_info
 {
 	lv2_fs_mount_point* const mp;
