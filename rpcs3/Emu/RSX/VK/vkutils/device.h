@@ -119,6 +119,8 @@ namespace vk
 		void create(VkInstance context, VkPhysicalDevice pdev, bool allow_extensions);
 
 		std::string get_name() const;
+		u32 get_vendor_id() const;
+		u32 get_device_id() const;
 
 		driver_vendor get_driver_vendor() const;
 		std::string get_driver_version() const;

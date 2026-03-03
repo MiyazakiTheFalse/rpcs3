@@ -40,8 +40,6 @@ u64 GLGSRender::get_cycles()
 
 GLGSRender::GLGSRender(utils::serial* ar) noexcept : GSRender(ar)
 {
-	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", "v1.95");
-
 	if (g_cfg.video.disable_vertex_cache)
 		m_vertex_cache = std::make_unique<gl::null_vertex_cache>();
 	else
@@ -97,7 +95,6 @@ void GLGSRender::on_init_thread()
 	// NOTES: All contexts have to be created before any is bound to a thread
 	// This allows context sharing to work (both GLRCs passed to wglShareLists have to be idle or you get ERROR_BUSY)
 	m_context = m_frame->make_context();
-
 	const auto shadermode = g_cfg.video.shadermode.get();
 	if (shadermode != shader_mode::recompiler)
 	{
@@ -137,6 +134,17 @@ void GLGSRender::on_init_thread()
 
 	gl::init();
 	gl::set_command_context(gl_state);
+
+	const auto* const gl_vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+	const auto* const gl_renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+	const auto* const gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+	const std::string cache_platform_fields = rpcs3::cache::make_rsx_platform_fields("opengl",
+	{
+		{"vendor", gl_vendor ? gl_vendor : "unknown"},
+		{"device", gl_renderer ? gl_renderer : "unknown"},
+		{"driver", gl_version ? gl_version : "unknown"},
+	});
+	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", "v1.95", cache_platform_fields);
 
 	// Enable adaptive vsync if vsync is requested
 	gl::set_swapinterval(g_cfg.video.vsync ? -1 : 0);

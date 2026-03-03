@@ -597,7 +597,14 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	else
 		m_vertex_cache = std::make_unique<vk::weak_vertex_cache>();
 
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95");
+	const std::string cache_platform_fields = rpcs3::cache::make_rsx_platform_fields("vulkan",
+	{
+		{"vendor_id", fmt::format("0x%x", m_device->gpu().get_vendor_id())},
+		{"device_id", fmt::format("0x%x", m_device->gpu().get_device_id())},
+		{"gpu", m_device->gpu().get_name()},
+		{"driver", m_device->gpu().get_driver_version()},
+	});
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95", cache_platform_fields);
 
 	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
 	{

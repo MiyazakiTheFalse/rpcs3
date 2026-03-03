@@ -43,15 +43,23 @@ Writers must record the intended artifact placement policy (`tier`) and the effe
 
 - Domain: `rsx`
 - Backend identity is renderer backend class (`opengl`, `vulkan`) passed by RSX cache owner.
+- RSX now passes explicit platform fields for shader/pipeline reuse checks via `make_rsx_platform_fields(...)`:
+  - `os=<platform fingerprint from get_platform_cache_id()>`
+  - `renderer=<opengl|vulkan>`
+  - OpenGL: `vendor=<GL_VENDOR>`, `device=<GL_RENDERER>`, `driver=<GL_VERSION>`
+  - Vulkan: `vendor_id=<VkPhysicalDeviceProperties::vendorID>`, `device_id=<...::deviceID>`, `gpu=<deviceName>`, `driver=<decoded Vulkan driver version>`
 - Pipeline data embeds a compatibility hash computed from the tuple to gate pipeline binary reuse.
 
 ## Platform/driver-sensitive fields
 
-- Platform fingerprint currently includes:
+- Default platform fingerprint (`get_platform_cache_id`) includes:
   - OS type and architecture
   - OS major/minor/patch version
   - CPU family/model
-- For RSX, backend identity should be extended in future with explicit driver identity fields when available (e.g. Vulkan driver build, GL vendor/renderer string) to tighten shader pipeline portability.
+- RSX platform field formatting is deterministic:
+  - Ordered `key=value` pairs joined by `;`
+  - RSX tuple generation appends `os=...` then `renderer=...` in a fixed order after backend-specific fields.
+- RSX explicitly includes backend-specific driver identity fields so cached pipelines are invalidated across materially different driver/GPU stacks.
 
 ## Artifact serialization versions
 

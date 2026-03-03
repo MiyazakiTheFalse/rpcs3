@@ -274,6 +274,17 @@ namespace vk
 		return props.deviceName;
 	}
 
+	u32 physical_device::get_vendor_id() const
+	{
+		return props.vendorID;
+	}
+
+	u32 physical_device::get_device_id() const
+	{
+		return props.deviceID;
+	}
+
+
 	driver_vendor physical_device::get_driver_vendor() const
 	{
 #ifdef __APPLE__
