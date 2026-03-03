@@ -144,7 +144,8 @@ void GLGSRender::on_init_thread()
 		{"device", gl_renderer ? gl_renderer : "unknown"},
 		{"driver", gl_version ? gl_version : "unknown"},
 	});
-	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", "v1.95", cache_platform_fields);
+	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
+	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 
 	// Enable adaptive vsync if vsync is requested
 	gl::set_swapinterval(g_cfg.video.vsync ? -1 : 0);

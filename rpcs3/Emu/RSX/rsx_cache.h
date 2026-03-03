@@ -19,6 +19,24 @@
 
 namespace rsx
 {
+	inline constexpr u32 rsx_pipeline_data_serialization_format_version = 1;
+	inline constexpr u32 rsx_pipeline_data_state_schema_version = 1;
+
+	inline std::string get_pipeline_cache_namespace()
+	{
+		// This namespace controls the on-disk RSX pipeline object directory.
+		// Included dimensions:
+		//  - fmt: pipeline_data binary serialization layout version.
+		//  - state: packed RSX state schema stored in pipeline_data.
+		//  - prec: shader_precision, because it changes generated shader code paths.
+		// Excluded by design: runtime-only knobs (shader compiler thread count, overlays,
+		// async scheduling, buffering, etc.) that do not alter shader/pipeline binaries.
+		return fmt::format("fmt{}.state{}.prec{}",
+			rsx_pipeline_data_serialization_format_version,
+			rsx_pipeline_data_state_schema_version,
+			static_cast<u32>(g_cfg.video.shader_precision.get()));
+	}
+
 	template <typename pipeline_storage_type, typename backend_storage>
 	class shaders_cache
 	{
@@ -100,7 +118,7 @@ namespace rsx
 		    shader_loading_dialog* dlg)
 		{
 			const u64 expected_compatibility_hash = get_compatibility_hash();
-			constexpr u32 expected_serialization_version = 1;
+			constexpr u32 expected_serialization_version = rsx_pipeline_data_serialization_format_version;
 			atomic_t<u32> processed(0);
 
 			std::function<void(u32)> shader_load_worker = [&](u32 stop_at)
@@ -493,7 +511,7 @@ namespace rsx
 		{
 			pipeline_data data_block = {};
 			data_block.compatibility_hash = get_compatibility_hash();
-			data_block.serialization_version = 1;
+			data_block.serialization_version = rsx_pipeline_data_serialization_format_version;
 			data_block.pipeline_properties = pipeline;
 			data_block.vertex_program_hash = m_storage.get_hash(vp);
 			data_block.fragment_program_hash = m_storage.get_hash(fp);

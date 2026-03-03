@@ -80,7 +80,18 @@ Writers must record the intended artifact placement policy (`tier`) and the effe
 - **SPU cache blob manifest entries**: `spu-bin-v3` (fallback accepted: `spu-bin-v2`)
 - **PPU object manifest entries**: `ppu-obj-v2`
 - **RSX raw program index entries**: `rsx-raw-program-v2` (fallback accepted: `rsx-raw-program-v1`)
-- **RSX pipeline binary payload**: `serialization_version = 1` in `pipeline_data` + versioned path prefix (`v1.95` today)
+- **RSX pipeline binary payload**: `serialization_version = 1` in `pipeline_data` + computed namespace from `rsx::get_pipeline_cache_namespace()` (`fmt<serialization>.state<packed-state-schema>.prec<shader_precision>`).
+
+
+### RSX pipeline namespace composition
+
+RSX pipeline object paths are versioned by `rsx::get_pipeline_cache_namespace()` in `rsx_cache.h` to isolate only binary-affecting dimensions:
+
+- `fmt<N>`: `pipeline_data` serialization layout version (`rsx_pipeline_data_serialization_format_version`).
+- `state<N>`: RSX packed state schema version (`rsx_pipeline_data_state_schema_version`) for the fields persisted in `pipeline_data`.
+- `prec<N>`: `g_cfg.video.shader_precision`, since it changes generated shader code paths.
+
+Intentionally excluded from the namespace are runtime-only settings that do not change generated shader/pipeline binaries (for example shader compiler worker count, async scheduling modes, overlays/debug toggles). Excluding these avoids unnecessary shader/pipeline cache invalidation storms when users tweak runtime behavior.
 
 ## Manifest validation gate policy
 
