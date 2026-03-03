@@ -18,12 +18,25 @@
 #include "QApplication"
 #include "QClipboard"
 #include "QDesktopServices"
+#include "QDirIterator"
 #include "QFileDialog"
 #include "QInputDialog"
 #include "QMessageBox"
 
 LOG_CHANNEL(game_list_log, "GameList");
 LOG_CHANNEL(sys_log, "SYS");
+
+namespace
+{
+	bool has_cache_manifest_entries(const std::string& cache_base_dir, const QStringList& filters)
+	{
+		if (cache_base_dir.empty())
+			return false;
+
+		QDirIterator it(QString::fromStdString(cache_base_dir), filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+		return it.hasNext();
+	}
+}
 
 std::string get_savestate_file(std::string_view title_id, std::string_view boot_pat, s64 rel_id, u64 aggregate_file_size = umax);
 
@@ -198,6 +211,9 @@ void game_list_context_menu::show_single_selection_context_menu(const game_info&
 	}
 
 	const std::string cache_base_dir = fs::get_path_if_dir(rpcs3::utils::get_cache_dir_by_serial(serial));
+	const bool has_shader_cache = has_cache_manifest_entries(cache_base_dir, {QStringLiteral("*.fpidx"), QStringLiteral("*.vpidx")});
+	const bool has_ppu_cache = has_cache_manifest_entries(cache_base_dir, {QStringLiteral("manifest.index")});
+	const bool has_spu_cache = has_cache_manifest_entries(cache_base_dir, {QStringLiteral("*.manifest")});
 	const bool has_hdd1_cache_dir = !rpcs3::utils::get_dir_list(rpcs3::utils::get_hdd1_cache_dir(), serial).empty();
 	const std::string savestates_dir = fs::get_path_if_dir(rpcs3::utils::get_savestates_dir(serial));
 	const game_list_actions::content_info content_info = m_game_list_actions->GetContentInfo({gameinfo});
@@ -211,30 +227,39 @@ void game_list_context_menu::show_single_selection_context_menu(const game_info&
 		return false;
 	};
 
-	if (!cache_base_dir.empty())
+	if (has_shader_cache || has_ppu_cache || has_spu_cache)
 	{
 		remove_menu->addSeparator();
 
-		QAction* remove_shader_cache = remove_menu->addAction(tr("&Remove Shader Cache"));
-		remove_shader_cache->setEnabled(!is_current_running_game);
-		connect(remove_shader_cache, &QAction::triggered, this, [this, serial]()
+		if (has_shader_cache)
 		{
-			m_game_list_actions->RemoveShaderCache(serial, true);
-		});
+			QAction* remove_shader_cache = remove_menu->addAction(tr("&Remove Shader Cache"));
+			remove_shader_cache->setEnabled(!is_current_running_game);
+			connect(remove_shader_cache, &QAction::triggered, this, [this, serial]()
+			{
+				m_game_list_actions->RemoveShaderCache(serial, true);
+			});
+		}
 
-		QAction* remove_ppu_cache = remove_menu->addAction(tr("&Remove PPU Cache"));
-		remove_ppu_cache->setEnabled(!is_current_running_game);
-		connect(remove_ppu_cache, &QAction::triggered, this, [this, serial]()
+		if (has_ppu_cache)
 		{
-			m_game_list_actions->RemovePPUCache(serial, true);
-		});
+			QAction* remove_ppu_cache = remove_menu->addAction(tr("&Remove PPU Cache"));
+			remove_ppu_cache->setEnabled(!is_current_running_game);
+			connect(remove_ppu_cache, &QAction::triggered, this, [this, serial]()
+			{
+				m_game_list_actions->RemovePPUCache(serial, true);
+			});
+		}
 
-		QAction* remove_spu_cache = remove_menu->addAction(tr("&Remove SPU Cache"));
-		remove_spu_cache->setEnabled(!is_current_running_game);
-		connect(remove_spu_cache, &QAction::triggered, this, [this, serial]()
+		if (has_spu_cache)
 		{
-			m_game_list_actions->RemoveSPUCache(serial, true);
-		});
+			QAction* remove_spu_cache = remove_menu->addAction(tr("&Remove SPU Cache"));
+			remove_spu_cache->setEnabled(!is_current_running_game);
+			connect(remove_spu_cache, &QAction::triggered, this, [this, serial]()
+			{
+				m_game_list_actions->RemoveSPUCache(serial, true);
+			});
+		}
 	}
 
 	if (has_hdd1_cache_dir)
@@ -247,7 +272,7 @@ void game_list_context_menu::show_single_selection_context_menu(const game_info&
 		});
 	}
 
-	if (!cache_base_dir.empty() || has_hdd1_cache_dir)
+	if (has_shader_cache || has_ppu_cache || has_spu_cache || has_hdd1_cache_dir)
 	{
 		QAction* remove_all_caches = remove_menu->addAction(tr("&Remove All Caches"));
 		remove_all_caches->setEnabled(!is_current_running_game);
