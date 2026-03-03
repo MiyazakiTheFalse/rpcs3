@@ -8,6 +8,7 @@
 #include "screenshot_manager_dialog.h"
 #include "kernel_explorer.h"
 #include "game_list_frame.h"
+#include "game_data_database_rebuilder.h"
 #include "debugger_frame.h"
 #include "log_frame.h"
 #include "settings_dialog.h"
@@ -1974,6 +1975,7 @@ void main_window::OnEmuStop()
 	ui->removeAllCachesAct->setEnabled(true);
 	ui->removeSavestatesAct->setEnabled(true);
 	ui->cleanUpGameListAct->setEnabled(true);
+	ui->rebuildGameDataDatabaseAct->setEnabled(true);
 
 	ui->actionManage_Users->setEnabled(true);
 	ui->confCamerasAct->setEnabled(true);
@@ -2028,6 +2030,7 @@ void main_window::OnEmuReady()
 	ui->removeAllCachesAct->setEnabled(false);
 	ui->removeSavestatesAct->setEnabled(false);
 	ui->cleanUpGameListAct->setEnabled(false);
+	ui->rebuildGameDataDatabaseAct->setEnabled(false);
 
 	m_system_state = system_state::ready;
 }
@@ -2827,6 +2830,7 @@ void main_window::CreateConnects()
 		m_game_list_frame->actions()->BatchRemoveContentLists({}, true);
 	});
 	connect(ui->cleanUpGameListAct, &QAction::triggered, this, &main_window::CleanUpGameList);
+	connect(ui->rebuildGameDataDatabaseAct, &QAction::triggered, this, &main_window::RebuildGameDataDatabase);
 
 	connect(ui->removeFirmwareCacheAct, &QAction::triggered, this, &main_window::RemoveFirmwareCache);
 	connect(ui->createFirmwareCacheAct, &QAction::triggered, this, &main_window::CreateFirmwareCache);
@@ -3787,6 +3791,51 @@ void main_window::CleanUpGameList()
 
 	// Remove the found serials (title id) in "games.yml" file (if any)
 	QMessageBox::information(this, tr("Summary"), tr("%0 game(s) removed from game list").arg(Emu.RemoveGames(serials_to_remove_from_yml)));
+}
+
+
+void main_window::RebuildGameDataDatabase()
+{
+	if (QMessageBox::question(this, tr("Confirm Rebuild"), tr("Scan game/install/save-data stores and rebuild game-list database references?")) != QMessageBox::Yes)
+	{
+		return;
+	}
+
+	const auto result = game_data_database_rebuilder::run(this, Emu.GetGamesConfig().get_games());
+
+	if (!result)
+	{
+		return;
+	}
+
+	const u32 removed = Emu.RemoveGames(result->stale_games_yml_serials);
+
+	QStringList affected_ids;
+	for (const std::string& serial : result->affected_title_ids)
+	{
+		if (!serial.empty())
+		{
+			affected_ids.append(QString::fromStdString(serial));
+		}
+	}
+
+	const QString affected_text = affected_ids.isEmpty() ? tr("None") : affected_ids.join(", ");
+
+	gui_log.notice("Game data database rebuild complete: fixed=%u warn=%u failed=%u removed_from_yml=%u", result->fixed_count, result->warn_count, result->failed_count, removed);
+	if (!affected_ids.isEmpty())
+	{
+		gui_log.notice("Game data database rebuild affected title IDs: %s", affected_text);
+	}
+
+	QMessageBox::information(this, tr("Rebuild Game Data Database"),
+		tr("Rebuild finished.\n\nFixed: %0\nWarnings: %1\nFailures: %2\nRemoved stale game-list entries: %3\nAffected title IDs: %4")
+			.arg(result->fixed_count)
+			.arg(result->warn_count)
+			.arg(result->failed_count)
+			.arg(removed)
+			.arg(affected_text));
+
+	m_game_list_frame->Refresh(true);
 }
 
 void main_window::RemoveFirmwareCache()

@@ -190,6 +190,7 @@
      <addaction name="removeSavestatesAct"/>
      <addaction name="separator"/>
      <addaction name="cleanUpGameListAct"/>
+     <addaction name="rebuildGameDataDatabaseAct"/>
     </widget>
     <widget class="QMenu" name="menuFirmware">
      <property name="title">
@@ -337,6 +338,7 @@
     <addaction name="actionLog_Viewer"/>
     <addaction name="toolsCheckConfigAct"/>
     <addaction name="toolsVfsDialogAct"/>
+    <addaction name="rebuildGameDataDatabaseAct"/>
     <addaction name="patchCreatorAct"/>
     <addaction name="actionMusic_Player"/>
     <addaction name="separator"/>
@@ -1524,7 +1526,12 @@
     <string>Boot ISO</string>
    </property>
   </action>
- </widget>
+   <action name="rebuildGameDataDatabaseAct">
+   <property name="text">
+    <string>Rebuild Game Data Database</string>
+   </property>
+  </action>
+</widget>
  <layoutdefault spacing="6" margin="11"/>
  <resources>
   <include location="../resources.qrc"/>

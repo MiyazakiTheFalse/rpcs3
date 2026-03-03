@@ -688,6 +688,175 @@ namespace rpcs3::utils
 		return {};
 	}
 
+
+	game_data_database_result rebuild_game_data_database(const std::map<std::string, std::string>& games_yml_entries,
+		const maintenance_progress_callback& progress_cb, const maintenance_cancel_callback& cancel_cb)
+	{
+		game_data_database_result result;
+		std::set<std::string> affected;
+
+		auto is_canceled = [&]()
+		{
+			return cancel_cb && cancel_cb();
+		};
+
+		auto has_valid_serial = [](std::string_view title_id)
+		{
+			if (title_id.size() != 9)
+			{
+				return false;
+			}
+
+			return std::all_of(title_id.begin(), title_id.end(), [](char ch)
+			{
+				return std::isalnum(static_cast<unsigned char>(ch)) != 0;
+			});
+		};
+
+		std::vector<std::pair<std::string, std::string>> title_dirs;
+		const std::string game_dir = get_hdd0_game_dir();
+
+		for (const auto& entry : fs::dir(game_dir))
+		{
+			if (!entry.is_directory || entry.name == "." || entry.name == ".." || entry.name.starts_with("$"))
+			{
+				continue;
+			}
+
+			title_dirs.emplace_back(entry.name, game_dir + entry.name);
+		}
+
+		std::vector<std::string> save_data_dirs;
+		const std::string hdd0_dir = get_hdd0_dir();
+		for (const auto& home_entry : fs::dir(hdd0_dir + "home/"))
+		{
+			if (!home_entry.is_directory || check_user(home_entry.name) == 0)
+			{
+				continue;
+			}
+
+			const std::string per_user_savedata = hdd0_dir + "home/" + home_entry.name + "/savedata/";
+			for (const auto& save_entry : fs::dir(per_user_savedata))
+			{
+				if (save_entry.is_directory && save_entry.name != "." && save_entry.name != "..")
+				{
+					save_data_dirs.emplace_back(per_user_savedata + save_entry.name);
+				}
+			}
+		}
+
+		for (const auto& save_entry : fs::dir(hdd0_dir + "savedata/"))
+		{
+			if (save_entry.is_directory && save_entry.name != "." && save_entry.name != ".." && save_entry.name != "vmc")
+			{
+				save_data_dirs.emplace_back(hdd0_dir + "savedata/" + save_entry.name);
+			}
+		}
+
+		u32 done = 0;
+		const u32 total = static_cast<u32>(title_dirs.size() + save_data_dirs.size() + games_yml_entries.size());
+
+		auto report = [&]()
+		{
+			if (progress_cb)
+			{
+				progress_cb(done, total);
+			}
+		};
+
+		for (const auto& [dir_name, dir_path] : title_dirs)
+		{
+			if (is_canceled())
+			{
+				break;
+			}
+
+			if (!has_valid_serial(dir_name))
+			{
+				result.warn_count++;
+				++done;
+				report();
+				continue;
+			}
+
+			const content_bucket bucket = classify_title_dir(dir_path, dir_name);
+			if (bucket == content_bucket::unknown)
+			{
+				result.warn_count++;
+				affected.emplace(dir_name);
+			}
+
+			++done;
+			report();
+		}
+
+		for (const std::string& save_dir : save_data_dirs)
+		{
+			if (is_canceled())
+			{
+				break;
+			}
+
+			if (!fs::is_file(save_dir + "/PARAM.SFO"))
+			{
+				result.warn_count++;
+			}
+
+			++done;
+			report();
+		}
+
+		for (const auto& [serial, path] : games_yml_entries)
+		{
+			if (is_canceled())
+			{
+				break;
+			}
+
+			bool stale = serial.empty() || !has_valid_serial(serial) || path.empty();
+
+			if (!stale)
+			{
+				std::string normalized_path = path;
+				if (const usz end = normalized_path.find_last_not_of('/'); end + 1 > 0)
+				{
+					normalized_path.resize(end + 1);
+				}
+				if (normalized_path.ends_with("/C00") || normalized_path.ends_with("\\C00"))
+				{
+					normalized_path = normalized_path.substr(0, normalized_path.size() - 4);
+				}
+
+				if (!fs::is_dir(normalized_path) && !fs::is_file(normalized_path))
+				{
+					stale = true;
+				}
+				else if (fs::is_dir(normalized_path))
+				{
+					const std::string sfo_dir = get_sfo_dir_from_game_path(normalized_path, serial);
+					if (!fs::is_file(sfo_dir + "/PARAM.SFO"))
+					{
+						stale = true;
+					}
+				}
+			}
+
+			if (stale)
+			{
+				result.stale_games_yml_serials.push_back(serial);
+				result.fixed_count++;
+				affected.emplace(serial);
+			}
+
+			++done;
+			report();
+		}
+
+		result.affected_title_ids.assign(affected.begin(), affected.end());
+		return result;
+	}
+
+
 	bool version_is_bigger(std::string_view v0, std::string_view v1, std::string_view serial, bool is_fw)
 	{
 		std::add_pointer_t<char> ev0, ev1;
