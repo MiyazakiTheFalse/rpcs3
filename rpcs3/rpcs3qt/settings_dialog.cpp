@@ -1006,6 +1006,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> gui_settings, std
 	m_emu_settings->EnhanceComboBox(ui->combo_audio_channel_layout, emu_settings_type::AudioChannelLayout);
 	SubscribeTooltip(ui->gb_audio_channel_layout, tooltips.settings.audio_channel_layout);
 
+	m_emu_settings->EnhanceComboBox(ui->audioLatencyProfileBox, emu_settings_type::AudioLatencyProfile);
+	SubscribeTooltip(ui->gb_audio_latency_profile, tooltips.settings.audio_latency_profile);
+
 	connect(ui->combo_audio_format, &QComboBox::currentIndexChanged, this, [this](int index)
 	{
 		const auto [text, value] = get_data(ui->combo_audio_format, index);
