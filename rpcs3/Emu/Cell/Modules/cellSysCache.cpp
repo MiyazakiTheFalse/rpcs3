@@ -3,6 +3,7 @@
 #include "Emu/system_utils.hpp"
 #include "Emu/VFS.h"
 #include "Emu/IdManager.h"
+#include "Emu/cache_utils.hpp"
 #include "Emu/Cell/PPUModule.h"
 
 #include "Emu/Cell/lv2/sys_fs.h"
@@ -150,6 +151,7 @@ extern std::string get_syscache_state_corruption_indicator_file_path(std::string
 extern void signal_system_cache_can_stay()
 {
 	ensure(g_fxo->try_get<syscache_info>())->retain_caches = true;
+	rpcs3::cache::set_current_run_pinned(true);
 }
 
 error_code cellSysCacheClear()

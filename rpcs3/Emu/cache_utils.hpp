@@ -53,6 +53,17 @@ namespace rpcs3::cache
 		std::string tier;
 	};
 
+	struct run_info
+	{
+		std::string title_id;
+		std::string run_id;
+		u64 created_at = 0;
+		u64 last_accessed_at = 0;
+		bool pinned = false;
+		std::string run_reason;
+		std::string label;
+	};
+
 	std::string get_ppu_cache();
 	std::string get_shared_cas_root();
 	std::string get_platform_cache_id();
@@ -71,10 +82,13 @@ namespace rpcs3::cache
 	bool get_from_cas(const std::string& hash_key, std::vector<uchar>& out);
 	std::string make_manifest_record(cas_artifact_type artifact, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_cache_tier tier = cas_cache_tier::auto_select);
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_codec codec = cas_codec::auto_select, cas_cache_tier tier = cas_cache_tier::auto_select);
+	std::vector<run_info> list_runs(std::string_view title_id);
+	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned);
+	bool set_current_run_pinned(bool pinned);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);
 	bool is_manifest_record_compatible(const manifest_record& rec, cas_artifact_type expected_artifact, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec = cas_codec::auto_select, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	void record_catalog_reference(std::string_view family, std::string_view artifact_type, std::string_view hash_key, std::string_view compatibility_tuple, std::string_view format_version, std::string_view settings_fingerprint, std::string_view gpu_fingerprint = {});
-	void run_policy_gc();
+	void run_policy_gc(bool hard_emergency_mode = false);
 	void limit_cache_size();
 }
