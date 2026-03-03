@@ -9,6 +9,7 @@
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Crypto/sha1.h"
+#include "Emu/RSX/driver_cache_policy.h"
 
 #include <algorithm>
 #include <charconv>
@@ -1313,6 +1314,41 @@ namespace rpcs3::cache
 			return std::nullopt;
 		}
 
+		static std::string extract_compat_field(std::string_view tuple, std::string_view key);
+
+		struct parsed_driver_identity
+		{
+			std::string backend;
+			std::string vendor;
+			std::string family;
+			std::string version;
+		};
+
+		static parsed_driver_identity parse_driver_identity(std::string_view tuple)
+		{
+			parsed_driver_identity out{};
+			out.backend = extract_compat_field(tuple, "backend");
+			out.vendor = extract_compat_field(tuple, "driver_vendor");
+			out.family = extract_compat_field(tuple, "driver_family");
+			out.version = extract_compat_field(tuple, "driver");
+
+			if (out.vendor.empty())
+			{
+				out.vendor = extract_compat_field(tuple, "vendor");
+			}
+
+			if (out.family.empty())
+			{
+				out.family = extract_compat_field(tuple, "gpu");
+				if (out.family.empty())
+				{
+					out.family = extract_compat_field(tuple, "device");
+				}
+			}
+
+			return out;
+		}
+
 		static std::string extract_compat_field(std::string_view tuple, std::string_view key)
 		{
 			for (usz begin = 0, end = 0; begin < tuple.size(); begin = end + 1)
@@ -1708,18 +1744,31 @@ namespace rpcs3::cache
 			if (gpu_exact)
 			{
 				candidate.score += options.weight_gpu;
+				candidate.run_reason = "driver_exact";
 			}
 			else
 			{
-				const std::string current_driver = extract_compat_field(current_gpu_fingerprint, "driver");
-				const std::string run_driver = extract_compat_field(metadata.gpu_fingerprint, "driver");
-				if (!current_driver.empty() && !run_driver.empty() && current_driver.substr(0, 3) == run_driver.substr(0, 3))
+				const auto current_driver = parse_driver_identity(current_gpu_fingerprint);
+				const auto run_driver = parse_driver_identity(metadata.gpu_fingerprint);
+				const auto policy = rsx::driver_cache_policy::evaluate_transition(
+					{ run_driver.backend, run_driver.vendor, run_driver.family, run_driver.version },
+					{ current_driver.backend, current_driver.vendor, current_driver.family, current_driver.version });
+
+				switch (policy.policy)
 				{
+				case rsx::driver_cache_policy::reuse_policy::allow:
 					candidate.score += options.weight_gpu / 2;
-				}
-				else
-				{
-					candidate.mismatches.push_back({run_mismatch_reason::gpu, false, "GPU fingerprint mismatch"});
+					candidate.run_reason = std::string("driver_policy:") + policy.rationale;
+					break;
+				case rsx::driver_cache_policy::reuse_policy::allow_with_pipeline_rebuild:
+					candidate.score += options.weight_gpu / 3;
+					candidate.mismatches.push_back({run_mismatch_reason::gpu, false, fmt::format("GPU transition requires pipeline rebuild (%s)", policy.rationale)});
+					candidate.run_reason = std::string("driver_policy:") + policy.rationale;
+					break;
+				case rsx::driver_cache_policy::reuse_policy::deny:
+					candidate.mismatches.push_back({run_mismatch_reason::gpu, true, fmt::format("GPU transition denied (%s)", policy.rationale)});
+					candidate.run_reason = std::string("driver_policy:") + policy.rationale;
+					break;
 				}
 			}
 
@@ -1793,6 +1842,10 @@ namespace rpcs3::cache
 
 		best.full_reuse = !has_hard_mismatch && !has_soft_mismatch;
 		best.partial_rebuild = !has_hard_mismatch && has_soft_mismatch;
+		if (best.run_reason.empty())
+		{
+			best.run_reason = best.full_reuse ? "full_reuse" : (best.partial_rebuild ? "partial_rebuild" : "mismatch");
+		}
 		return best;
 	}
 
@@ -1847,6 +1900,49 @@ namespace rpcs3::cache
 		}
 
 		return set_run_pinned(title_id, runs.front().run_id, pinned);
+	}
+
+	bool set_current_run_reason(std::string_view run_reason)
+	{
+		const std::string title_id = Emu.GetTitleID();
+		if (title_id.empty())
+		{
+			return false;
+		}
+
+		std::string run_id;
+		{
+			const std::lock_guard lock(s_current_run_mutex);
+			if (const auto it = s_current_run_id_by_title.find(title_id); it != s_current_run_id_by_title.end())
+			{
+				run_id = it->second;
+			}
+		}
+
+		if (run_id.empty())
+		{
+			auto runs = list_runs(title_id);
+			if (runs.empty())
+			{
+				return false;
+			}
+
+			run_id = runs.front().run_id;
+		}
+
+		std::string run_json;
+		const std::string run_path = make_run_json_path(title_id, run_id);
+		if (!fs::read_file(run_path, run_json))
+		{
+			return false;
+		}
+
+		if (!upsert_json_key_value(run_json, "run_reason", fmt::format("\"%s\"", escape_json_string(run_reason))))
+		{
+			return false;
+		}
+
+		return write_text_file_atomic(run_path, run_json);
 	}
 
 	void run_policy_gc(bool hard_emergency_mode)

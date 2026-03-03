@@ -144,6 +144,8 @@ void GLGSRender::on_init_thread()
 		{"vendor", gl_vendor ? gl_vendor : "unknown"},
 		{"device", gl_renderer ? gl_renderer : "unknown"},
 		{"driver", gl_version ? gl_version : "unknown"},
+		{"driver_vendor", gl_vendor ? gl_vendor : "unknown"},
+		{"driver_family", gl_renderer ? gl_renderer : "unknown"},
 	});
 	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "opengl", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
 	rpcs3::cache::run_match_options run_match_options{};
@@ -157,6 +159,7 @@ void GLGSRender::on_init_thread()
 			rsx_log.notice("RSX catalog mismatch (%s): %s", mismatch.hard_constraint ? "hard" : "soft", mismatch.detail);
 		}
 	}
+	rpcs3::cache::set_current_run_reason(reuse_match.run_id.empty() ? "no_match" : reuse_match.run_reason);
 	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
 	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 

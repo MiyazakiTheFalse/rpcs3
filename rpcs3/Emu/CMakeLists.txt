@@ -547,6 +547,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/rsx_methods.cpp
     RSX/rsx_utils.cpp
     RSX/rsx_vertex_data.cpp
+    RSX/driver_cache_policy.cpp
 )
 
 if(NOT ANDROID AND NOT APPLE)
