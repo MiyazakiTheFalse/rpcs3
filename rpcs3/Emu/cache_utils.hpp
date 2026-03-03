@@ -11,6 +11,22 @@ namespace rpcs3::cache
 {
 	inline constexpr u32 emu_cache_schema_version = 1;
 
+	enum class cas_codec : u8
+	{
+		auto_select = 0,
+		none = 1,
+		lz4 = 2,
+		zstd = 3,
+	};
+
+	enum class cas_cache_tier : u8
+	{
+		auto_select = 0,
+		hot = 1,
+		warm = 2,
+		cold = 3,
+	};
+
 	struct manifest_record
 	{
 		std::string artifact_type;
@@ -25,7 +41,7 @@ namespace rpcs3::cache
 	std::string get_platform_cache_id();
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields = {});
 
-	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension = {});
+	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension = {}, cas_cache_tier tier = cas_cache_tier::auto_select, cas_codec codec = cas_codec::auto_select);
 	bool write_file_atomic(const std::string& path, const void* data, std::size_t size);
 	bool write_text_file_atomic(const std::string& path, std::string_view text);
 	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal = true);
