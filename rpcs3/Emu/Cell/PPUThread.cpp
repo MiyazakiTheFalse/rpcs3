@@ -5243,6 +5243,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// Create worker threads for compilation
 	if (!workload.empty())
 	{
+		struct ppu_manifest_record
+		{
+			rpcs3::cache::manifest_record value;
+		};
+
+		std::vector<ppu_manifest_record> manifest_records;
+		std::mutex manifest_mutex;
+
 		// Update progress dialog
 		g_progr_ptotal += ::size32(workload);
 
@@ -5262,17 +5270,23 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			const ppu_module<lv2_obj>& main_module;
 			const std::string& cache_path;
 			const cpu_thread* cpu;
+			std::vector<ppu_manifest_record>& manifest_records;
+			std::mutex& manifest_mutex;
 
 			std::unique_lock<decltype(jit_core_allocator::sem)> core_lock;
 
 			thread_op(atomic_t<u32>& work_cv, std::vector<std::pair<std::string, ppu_module<lv2_obj>>>& workload
-				, const cpu_thread* cpu, const ppu_module<lv2_obj>& main_module, const std::string& cache_path, decltype(jit_core_allocator::sem)& sem) noexcept
+				, const cpu_thread* cpu, const ppu_module<lv2_obj>& main_module, const std::string& cache_path
+				, std::vector<ppu_manifest_record>& manifest_records, std::mutex& manifest_mutex
+				, decltype(jit_core_allocator::sem)& sem) noexcept
 
 				: work_cv(work_cv)
 				, workload(workload)
 				, main_module(main_module)
 				, cache_path(cache_path)
 				, cpu(cpu)
+				, manifest_records(manifest_records)
+				, manifest_mutex(manifest_mutex)
 			{
 				// Save mutex
 				core_lock = std::unique_lock{sem, std::defer_lock};
@@ -5284,6 +5298,8 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				, main_module(other.main_module)
 				, cache_path(other.cache_path)
 				, cpu(other.cpu)
+				, manifest_records(other.manifest_records)
+				, manifest_mutex(other.manifest_mutex)
 			{
 				if (auto mtx = other.core_lock.mutex())
 				{
@@ -5339,8 +5355,15 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						compiled_obj.read(bytes.data(), bytes.size());
 						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), rpcs3::cache::cas_artifact_type::ppu_object_blob); !cas.empty())
 						{
-							rpcs3::cache::append_manifest_record_atomic(cache_path + "manifest.index",
-								rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::ppu_object_blob, cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
+							std::lock_guard manifest_lock(manifest_mutex);
+							ppu_manifest_record rec{};
+							rec.value.artifact_type = std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::ppu_object_blob));
+							rec.value.hash_key = cas;
+							rec.value.metadata = obj_name;
+							rec.value.compatibility_tuple = get_ppu_cache_compatibility_tuple();
+							rec.value.format_version = std::string(s_ppu_manifest_format_version);
+							rec.value.tier = std::to_string(static_cast<u8>(rpcs3::cache::get_default_tier_for_artifact(rpcs3::cache::cas_artifact_type::ppu_object_blob)));
+							manifest_records.push_back(std::move(rec));
 						}
 					}
 
@@ -5355,7 +5378,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		g_watchdog_hold_ctr++;
 
 		named_thread_group threads(fmt::format("PPUW.%u.", ++g_fxo->get<thread_index_allocator>().index), thread_count
-			, thread_op(work_cv, workload, cpu, info, cache_path, g_fxo->get<jit_core_allocator>().sem)
+			, thread_op(work_cv, workload, cpu, info, cache_path, manifest_records, manifest_mutex, g_fxo->get<jit_core_allocator>().sem)
 			, [&](u32 /*thread_index*/, thread_op& op)
 		{
 			// Allocate "core"
@@ -5366,6 +5389,100 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		});
 
 		threads.join();
+
+		if (!manifest_records.empty())
+		{
+			if (fs::file mf(cache_path + "manifest.index"))
+			{
+				for (std::string line; mf.read_line(line);)
+				{
+					rpcs3::cache::manifest_record existing{};
+					if (rpcs3::cache::parse_manifest_record(line, existing))
+					{
+						manifest_records.push_back({std::move(existing)});
+					}
+				}
+			}
+
+			std::sort(manifest_records.begin(), manifest_records.end(), [](const ppu_manifest_record& lhs, const ppu_manifest_record& rhs)
+			{
+				if (lhs.value.metadata != rhs.value.metadata)
+				{
+					return lhs.value.metadata < rhs.value.metadata;
+				}
+
+				if (lhs.value.artifact_type != rhs.value.artifact_type)
+				{
+					return lhs.value.artifact_type < rhs.value.artifact_type;
+				}
+
+				if (lhs.value.compatibility_tuple != rhs.value.compatibility_tuple)
+				{
+					return lhs.value.compatibility_tuple < rhs.value.compatibility_tuple;
+				}
+
+				if (lhs.value.format_version != rhs.value.format_version)
+				{
+					return lhs.value.format_version < rhs.value.format_version;
+				}
+
+				return lhs.value.hash_key < rhs.value.hash_key;
+			});
+
+			auto is_same_key = [](const ppu_manifest_record& lhs, const ppu_manifest_record& rhs)
+			{
+				return lhs.value.artifact_type == rhs.value.artifact_type
+					&& lhs.value.metadata == rhs.value.metadata
+					&& lhs.value.compatibility_tuple == rhs.value.compatibility_tuple
+					&& lhs.value.format_version == rhs.value.format_version;
+			};
+
+			std::vector<ppu_manifest_record> compacted;
+			compacted.reserve(manifest_records.size());
+			for (const auto& rec : manifest_records)
+			{
+				if (!compacted.empty() && is_same_key(compacted.back(), rec))
+				{
+					compacted.back() = rec;
+					continue;
+				}
+
+				compacted.emplace_back(rec);
+			}
+
+			std::string manifest_text;
+			for (const auto& rec : compacted)
+			{
+				rpcs3::cache::cas_codec codec = rpcs3::cache::cas_codec::auto_select;
+				if (!rec.value.codec.empty())
+				{
+					u32 codec_num = 0;
+					const auto [ptr, ec] = std::from_chars(rec.value.codec.data(), rec.value.codec.data() + rec.value.codec.size(), codec_num);
+					if (ec == std::errc{} && ptr == rec.value.codec.data() + rec.value.codec.size())
+					{
+						codec = static_cast<rpcs3::cache::cas_codec>(codec_num);
+					}
+				}
+
+				rpcs3::cache::cas_cache_tier tier = rpcs3::cache::cas_cache_tier::auto_select;
+				if (!rec.value.tier.empty())
+				{
+					u32 tier_num = 0;
+					const auto [ptr, ec] = std::from_chars(rec.value.tier.data(), rec.value.tier.data() + rec.value.tier.size(), tier_num);
+					if (ec == std::errc{} && ptr == rec.value.tier.data() + rec.value.tier.size())
+					{
+						tier = static_cast<rpcs3::cache::cas_cache_tier>(tier_num);
+					}
+				}
+
+				manifest_text += rpcs3::cache::make_manifest_record(rec.value.artifact_type, rec.value.hash_key, rec.value.metadata, rec.value.compatibility_tuple, rec.value.format_version, codec, tier);
+			}
+
+			if (!rpcs3::cache::write_text_file_atomic(cache_path + "manifest.index", manifest_text))
+			{
+				ppu_log.error("LLVM: Failed to persist manifest %smanifest.index", cache_path);
+			}
+		}
 
 		g_watchdog_hold_ctr--;
 	}
