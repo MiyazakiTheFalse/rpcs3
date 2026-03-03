@@ -138,6 +138,198 @@ namespace rpcs3::cache
 		return fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", get_schema_version_for_domain(domain), domain, backend_id, platform_fields);
 	}
 
+	bool parse_compatibility_tuple(std::string_view tuple, parsed_compatibility_tuple& out)
+	{
+		out = {};
+
+		for (usz start = 0; start <= tuple.size();)
+		{
+			const usz end = tuple.find('|', start);
+			const std::string_view part = end == umax ? tuple.substr(start) : tuple.substr(start, end - start);
+
+			if (const usz eq = part.find('='); eq != umax)
+			{
+				const std::string_view key = part.substr(0, eq);
+				const std::string_view value = part.substr(eq + 1);
+				if (key == "schema") out.schema = std::string(value);
+				else if (key == "domain") out.domain = std::string(value);
+				else if (key == "backend") out.backend = std::string(value);
+				else if (key == "platform") out.platform = std::string(value);
+			}
+
+			if (end == umax)
+			{
+				break;
+			}
+			start = end + 1;
+		}
+
+		for (usz start = 0; start <= out.platform.size();)
+		{
+			const usz end = out.platform.find(';', start);
+			const std::string_view part = end == umax ? std::string_view(out.platform).substr(start) : std::string_view(out.platform).substr(start, end - start);
+			if (const usz eq = part.find('='); eq != umax)
+			{
+				out.platform_fields.emplace(std::string(part.substr(0, eq)), std::string(part.substr(eq + 1)));
+			}
+
+			if (end == umax)
+			{
+				break;
+			}
+			start = end + 1;
+		}
+
+		return !out.schema.empty() && !out.domain.empty() && !out.backend.empty() && !out.platform.empty();
+	}
+
+	rsx_compatibility_decision compare_rsx_compatibility_tuples(std::string_view actual_tuple, std::string_view expected_tuple)
+	{
+		parsed_compatibility_tuple actual{};
+		parsed_compatibility_tuple expected{};
+		if (!parse_compatibility_tuple(actual_tuple, actual) || !parse_compatibility_tuple(expected_tuple, expected))
+		{
+			return { rsx_compatibility_mismatch_class::breaking, "invalid_tuple" };
+		}
+
+		if (actual.domain != expected.domain)
+		{
+			return { rsx_compatibility_mismatch_class::breaking, "domain_mismatch" };
+		}
+
+		const auto parse_major = [](std::string_view schema) -> u32
+		{
+			u32 value = 0;
+			std::from_chars(schema.data(), schema.data() + schema.size(), value);
+			return value;
+		};
+
+		if (parse_major(actual.schema) != parse_major(expected.schema))
+		{
+			return { rsx_compatibility_mismatch_class::breaking, "schema_major" };
+		}
+
+		if (actual.backend != expected.backend)
+		{
+			return { rsx_compatibility_mismatch_class::breaking, "backend" };
+		}
+
+		auto has_breakage_marker = [](const parsed_compatibility_tuple& tuple)
+		{
+			const auto it = tuple.platform_fields.find("driver_breakage");
+			if (it != tuple.platform_fields.end())
+			{
+				return it->second == "1" || it->second == "true" || it->second == "yes";
+			}
+			const auto st = tuple.platform_fields.find("driver_status");
+			return st != tuple.platform_fields.end() && st->second == "broken";
+		};
+
+		if (has_breakage_marker(actual) || has_breakage_marker(expected))
+		{
+			return { rsx_compatibility_mismatch_class::breaking, "driver_breakage" };
+		}
+
+		if (actual.platform == expected.platform)
+		{
+			return { rsx_compatibility_mismatch_class::reusable, "exact" };
+		}
+
+		const std::unordered_set<std::string_view> raw_affecting_fields =
+		{
+			"shader_precision",
+			"shader_mode",
+			"strict_rendering_mode",
+			"read_color_buffers",
+			"read_depth_buffer",
+		};
+
+		const std::unordered_set<std::string_view> pipeline_affecting_fields =
+		{
+			"state_pack",
+			"pipeline_layout",
+			"render_pass",
+		};
+
+		bool raw_drift = false;
+		bool pipeline_drift = false;
+		for (const auto& [key, value] : expected.platform_fields)
+		{
+			const auto it = actual.platform_fields.find(key);
+			if (it != actual.platform_fields.end() && it->second == value)
+			{
+				continue;
+			}
+
+			if (raw_affecting_fields.contains(key))
+			{
+				raw_drift = true;
+			}
+			else if (pipeline_affecting_fields.contains(key))
+			{
+				pipeline_drift = true;
+			}
+		}
+
+		for (const auto& [key, value] : actual.platform_fields)
+		{
+			const auto it = expected.platform_fields.find(key);
+			if (it != expected.platform_fields.end() && it->second == value)
+			{
+				continue;
+			}
+
+			if (raw_affecting_fields.contains(key))
+			{
+				raw_drift = true;
+			}
+			else if (pipeline_affecting_fields.contains(key))
+			{
+				pipeline_drift = true;
+			}
+		}
+
+		if (raw_drift)
+		{
+			return { rsx_compatibility_mismatch_class::rebuild_raw_only, "settings_raw" };
+		}
+
+		if (pipeline_drift)
+		{
+			return { rsx_compatibility_mismatch_class::rebuild_pipeline_only, "settings_pipeline" };
+		}
+
+		return { rsx_compatibility_mismatch_class::reusable, "settings_cosmetic" };
+	}
+
+	std::string make_manifest_metadata_with_reason(std::size_t payload_size, std::string_view reason_code)
+	{
+		if (reason_code.empty())
+		{
+			return std::to_string(payload_size);
+		}
+
+		return fmt::format("%zu;reason=%s", payload_size, reason_code);
+	}
+
+	std::string_view get_manifest_reason_code(std::string_view metadata)
+	{
+		const usz reason_pos = metadata.find(";reason=");
+		if (reason_pos == umax)
+		{
+			return {};
+		}
+
+		const usz value_pos = reason_pos + 8;
+		const usz end_pos = metadata.find(';', value_pos);
+		if (value_pos >= metadata.size())
+		{
+			return {};
+		}
+
+		return end_pos == umax ? metadata.substr(value_pos) : metadata.substr(value_pos, end_pos - value_pos);
+	}
+
 	static std::string canonical_sha1_hex(const void* data, std::size_t size)
 	{
 		sha1_context ctx;

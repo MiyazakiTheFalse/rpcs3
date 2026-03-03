@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 #include "util/types.hpp"
 
 namespace rpcs3::cache
@@ -51,6 +52,39 @@ namespace rpcs3::cache
 		std::string format_version;
 		std::string codec;
 		std::string tier;
+	};
+
+	enum class rsx_compatibility_mismatch_class : u8
+	{
+		reusable,
+		rebuild_pipeline_only,
+		rebuild_raw_only,
+		breaking,
+	};
+
+	struct parsed_compatibility_tuple
+	{
+		std::string schema;
+		std::string domain;
+		std::string backend;
+		std::string platform;
+		std::unordered_map<std::string, std::string> platform_fields;
+	};
+
+	struct rsx_compatibility_decision
+	{
+		rsx_compatibility_mismatch_class mismatch_class = rsx_compatibility_mismatch_class::breaking;
+		std::string reason_code = "invalid_tuple";
+
+		bool reuse_raw() const
+		{
+			return mismatch_class == rsx_compatibility_mismatch_class::reusable || mismatch_class == rsx_compatibility_mismatch_class::rebuild_pipeline_only;
+		}
+
+		bool reuse_pipeline() const
+		{
+			return mismatch_class == rsx_compatibility_mismatch_class::reusable;
+		}
 	};
 
 	struct run_info
@@ -122,6 +156,10 @@ namespace rpcs3::cache
 	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned);
 	bool set_current_run_pinned(bool pinned);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);
+	bool parse_compatibility_tuple(std::string_view tuple, parsed_compatibility_tuple& out);
+	rsx_compatibility_decision compare_rsx_compatibility_tuples(std::string_view actual_tuple, std::string_view expected_tuple);
+	std::string make_manifest_metadata_with_reason(std::size_t payload_size, std::string_view reason_code);
+	std::string_view get_manifest_reason_code(std::string_view metadata);
 	bool is_manifest_record_compatible(const manifest_record& rec, cas_artifact_type expected_artifact, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	bool is_manifest_record_compatible(const manifest_record& rec, std::string_view expected_artifact_type, std::string_view expected_compatibility_tuple, std::string_view expected_format_version, cas_codec expected_codec = cas_codec::auto_select, cas_cache_tier expected_tier = cas_cache_tier::auto_select);
 	void record_catalog_reference(std::string_view family, std::string_view artifact_type, std::string_view hash_key, std::string_view compatibility_tuple, std::string_view format_version, std::string_view settings_fingerprint, std::string_view gpu_fingerprint = {});
