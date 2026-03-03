@@ -698,6 +698,20 @@ void spu_cache::add(const spu_program& func)
 
 	// Append data
 	m_file.write_gather(gather, 3);
+
+	std::vector<u8> payload(sizeof(size) + sizeof(addr) + func.data.size() * 4);
+	std::memcpy(payload.data(), &size, sizeof(size));
+	std::memcpy(payload.data() + sizeof(size), &addr, sizeof(addr));
+	std::memcpy(payload.data() + sizeof(size) + sizeof(addr), func.data.data(), func.data.size() * 4);
+	if (const std::string cas = rpcs3::cache::put_to_cas(payload.data(), payload.size(), "spu"); !cas.empty())
+	{
+		if (const std::string ppu_cache = rpcs3::cache::get_ppu_cache(); !ppu_cache.empty())
+		{
+			const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v1-tane.dat";
+			fs::file mf(ppu_cache + filename + ".manifest", fs::append + fs::create + fs::write);
+			mf.write(rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point)));
+		}
+	}
 }
 
 void spu_cache::initialize(bool build_existing_cache)
@@ -722,6 +736,7 @@ void spu_cache::initialize(bool build_existing_cache)
 	// SPU cache file (version + block size type)
 	const std::string filename = "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v1-tane.dat";
 	const std::string loc = ppu_cache + filename;
+	const std::string manifest_loc = ppu_cache + filename + ".manifest";
 	const std::string loc_debug = fs::get_cache_dir() + "DEBUG/" + filename;
 
 	bool is_debug = false;
@@ -742,6 +757,40 @@ void spu_cache::initialize(bool build_existing_cache)
 
 	// Read cache
 	auto func_list = cache.get();
+
+	if (fs::file mf(manifest_loc))
+	{
+		for (std::string line; mf.read_line(line);)
+		{
+			const usz p0 = line.find('|');
+			const usz p1 = line.find('|', p0 + 1);
+			if (p0 == umax || p1 == umax)
+			{
+				continue;
+			}
+
+			std::vector<u8> bytes;
+			if (!rpcs3::cache::get_from_cas(line.substr(p0 + 1, p1 - p0 - 1), bytes) || bytes.size() < 8 || (bytes.size() - 8) % 4)
+			{
+				continue;
+			}
+
+			const be_t<u32>* hdr = reinterpret_cast<const be_t<u32>*>(bytes.data());
+			const u32 size_crc = hdr[0];
+			const u32 size = size_crc & 0xffff;
+			const u32 addr = hdr[1];
+			if (size * 4 != bytes.size() - 8)
+			{
+				continue;
+			}
+			spu_program res{};
+			res.entry_point = addr;
+			res.lower_bound = addr;
+			res.data.resize(size);
+			std::memcpy(res.data.data(), bytes.data() + 8, size * 4);
+			func_list.emplace_front(std::move(res));
+		}
+	}
 	atomic_t<usz> fnext{};
 	atomic_t<u8> fail_flag{0};
 

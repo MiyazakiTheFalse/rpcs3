@@ -5325,6 +5325,17 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						ppu_initialize2(jit2, part, cache_path, obj_name);
 					}
 
+					if (fs::file compiled_obj(cache_path + obj_name))
+					{
+						std::vector<u8> bytes(compiled_obj.size());
+						compiled_obj.read(bytes.data(), bytes.size());
+						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), "obj"); !cas.empty())
+						{
+							fs::file mf(cache_path + "manifest.index", fs::append + fs::create + fs::write);
+							mf.write(rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name));
+						}
+					}
+
 					ppu_log.success("LLVM: Compiled module %s", obj_name);
 				}
 

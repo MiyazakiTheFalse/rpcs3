@@ -12,6 +12,7 @@
 #include "Overlays/Shaders/shader_loading_dialog.h"
 
 #include <chrono>
+#include <optional>
 
 #include "util/sysinfo.hpp"
 #include "util/fnv_hash.hpp"
@@ -236,7 +237,7 @@ namespace rsx
 			if (!root)
 			{
 				fs::create_path(directory_path);
-				fs::create_path(root_path + "/raw");
+				fs::create_path(root_path + "/raw_index");
 				return;
 			}
 
@@ -301,19 +302,19 @@ namespace rsx
 
 			pipeline_data data = pack(pipeline, vp, fp);
 
-			std::string fp_name = root_path + "/raw/" + fmt::format("%llX.fp", data.fragment_program_hash);
-			std::string vp_name = root_path + "/raw/" + fmt::format("%llX.vp", data.vertex_program_hash);
+			const std::string fp_cas = rpcs3::cache::put_to_cas(fp.get_data(), fp.ucode_length, "fp");
+			const std::string vp_cas = rpcs3::cache::put_to_cas(vp.data.data(), vp.data.size() * sizeof(u32), "vp");
 
-			// Writeback to cache either if file does not exist or it is invalid (unexpected size)
-			// Note: fs::write_file is not atomic, if the process is terminated in the middle an empty file is created
-			if (fs::stat_t s{}; !fs::get_stat(fp_name, s) || s.size != fp.ucode_length)
+			if (!fp_cas.empty())
 			{
-				fs::write_file(fp_name, fs::rewrite, fp.get_data(), fp.ucode_length);
+				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
+				fs::write_file(fp_index, fs::rewrite, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length)));
 			}
 
-			if (fs::stat_t s{}; !fs::get_stat(vp_name, s) || s.size != vp.data.size() * sizeof(u32))
+			if (!vp_cas.empty())
 			{
-				fs::write_file(vp_name, fs::rewrite, vp.data);
+				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
+				fs::write_file(vp_index, fs::rewrite, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32))));
 			}
 
 			const u32 state_params[] =
@@ -345,8 +346,31 @@ namespace rsx
 			RSXVertexProgram vp = {};
 
 			fs::file f(fmt::format("%s/raw/%llX.vp", root_path, program_hash));
-			if (f) f.read(vp.data, f.size() / sizeof(u32));
+			if (f)
+			{
+				f.read(vp.data, f.size() / sizeof(u32));
+				return vp;
+			}
 
+			const std::string idx_path = fmt::format("%s/raw_index/%llX.vpidx", root_path, program_hash);
+			std::string rec;
+			if (!fs::read_file(idx_path, rec))
+			{
+				return vp;
+			}
+			const usz sep0 = rec.find('|');
+			const usz sep1 = rec.find('|', sep0 + 1);
+			if (sep0 == umax || sep1 == umax)
+			{
+				return vp;
+			}
+			std::vector<u8> bytes;
+			if (!rpcs3::cache::get_from_cas(rec.substr(sep0 + 1, sep1 - sep0 - 1), bytes) || bytes.size() % sizeof(u32))
+			{
+				return vp;
+			}
+			vp.data.resize(bytes.size() / sizeof(u32));
+			std::memcpy(vp.data.data(), bytes.data(), bytes.size());
 			return vp;
 		}
 
@@ -356,16 +380,36 @@ namespace rsx
 
 			RSXFragmentProgram fp = {};
 
-			const u32 size = fp.ucode_length = f ? ::size32(f) : 0;
+			u32 size = fp.ucode_length = f ? ::size32(f) : 0;
 
+			std::vector<u8> cas_bytes;
 			if (!size)
 			{
-				return fp;
+				const std::string idx_path = fmt::format("%s/raw_index/%llX.fpidx", root_path, program_hash);
+				std::string rec;
+				if (!fs::read_file(idx_path, rec))
+				{
+					return fp;
+				}
+				const usz sep0 = rec.find('|');
+				const usz sep1 = rec.find('|', sep0 + 1);
+				if (sep0 == umax || sep1 == umax || !rpcs3::cache::get_from_cas(rec.substr(sep0 + 1, sep1 - sep0 - 1), cas_bytes))
+				{
+					return fp;
+				}
+				size = fp.ucode_length = ::narrow<u32>(cas_bytes.size());
 			}
 
 			auto buf = std::make_unique<u8[]>(size);
 			fp.data = buf.get();
-			f.read(buf.get(), size);
+			if (f)
+			{
+				f.read(buf.get(), size);
+			}
+			else
+			{
+				std::memcpy(buf.get(), cas_bytes.data(), size);
+			}
 			fragment_program_data[fragment_program_data.push_begin()] = std::move(buf);
 			return fp;
 		}
