@@ -9,6 +9,15 @@
 #include "Crypto/sha1.h"
 
 #include <array>
+#include <cstring>
+#include <zstd.h>
+
+#if __has_include(<lz4.h>)
+#include <lz4.h>
+#define RPCS3_CAS_HAS_LZ4 1
+#else
+#define RPCS3_CAS_HAS_LZ4 0
+#endif
 
 LOG_CHANNEL(sys_log, "SYS");
 
@@ -175,7 +184,142 @@ namespace rpcs3::cache
 		return true;
 	}
 
-	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension)
+	namespace
+	{
+		inline constexpr u32 s_cas_blob_magic = 0x52434331; // RCC1
+		inline constexpr u8 s_cas_blob_version = 1;
+		inline constexpr u8 s_cas_flag_checksum32 = 0x1;
+
+		struct cas_blob_header
+		{
+			u32 magic{};
+			u8 version{};
+			u8 codec{};
+			u8 flags{};
+			u8 reserved{};
+			u64 uncompressed_size{};
+			u32 checksum32{};
+		};
+
+		static_assert(sizeof(cas_blob_header) == 20);
+
+		u32 get_checksum32(const void* data, usz size)
+		{
+			sha1_context ctx;
+			u8 digest[20]{};
+			sha1_starts(&ctx);
+			sha1_update(&ctx, reinterpret_cast<const u8*>(data), size);
+			sha1_finish(&ctx, digest);
+
+			u32 out{};
+			std::memcpy(&out, digest, sizeof(out));
+			return out;
+		}
+
+		cas_cache_tier infer_tier(std::string_view extension)
+		{
+			if (extension == "obj" || extension == "spu")
+			{
+				return cas_cache_tier::hot;
+			}
+
+			return cas_cache_tier::warm;
+		}
+
+		cas_codec infer_codec(cas_cache_tier tier)
+		{
+			switch (tier)
+			{
+			case cas_cache_tier::hot:
+				return cas_codec::lz4;
+			case cas_cache_tier::warm:
+			case cas_cache_tier::cold:
+				return cas_codec::zstd;
+			default:
+				return cas_codec::zstd;
+			}
+		}
+
+		bool compress_blob(cas_codec codec, const uchar* src, usz size, std::vector<uchar>& compressed, cas_codec& resolved_codec)
+		{
+			resolved_codec = codec;
+			switch (codec)
+			{
+			case cas_codec::none:
+				compressed.assign(src, src + size);
+				return true;
+			case cas_codec::lz4:
+			{
+#if RPCS3_CAS_HAS_LZ4
+				const int bound = LZ4_compressBound(static_cast<int>(size));
+				if (bound <= 0)
+				{
+					return false;
+				}
+
+				compressed.resize(bound);
+				const int out_size = LZ4_compress_default(reinterpret_cast<const char*>(src), reinterpret_cast<char*>(compressed.data()), static_cast<int>(size), bound);
+				if (out_size <= 0)
+				{
+					return false;
+				}
+				compressed.resize(static_cast<usz>(out_size));
+				return true;
+#else
+				static atomic_t<bool> s_warned = false;
+				if (!s_warned.exchange(true))
+				{
+					sys_log.notice("CAS requested LZ4 codec but LZ4 headers are unavailable in this build; falling back to Zstd.");
+				}
+				resolved_codec = cas_codec::zstd;
+				[[fallthrough]];
+#endif
+			}
+			case cas_codec::zstd:
+			{
+				compressed.resize(ZSTD_compressBound(size));
+				const usz out_size = ZSTD_compress(compressed.data(), compressed.size(), src, size, 3);
+				if (ZSTD_isError(out_size))
+				{
+					return false;
+				}
+				compressed.resize(out_size);
+				return true;
+			}
+			default:
+				return false;
+			}
+		}
+
+		bool decompress_blob(cas_codec codec, const uchar* src, usz src_size, uchar* dst, usz dst_size)
+		{
+			switch (codec)
+			{
+			case cas_codec::none:
+				if (src_size != dst_size)
+				{
+					return false;
+				}
+				std::memcpy(dst, src, src_size);
+				return true;
+			case cas_codec::lz4:
+#if RPCS3_CAS_HAS_LZ4
+				return LZ4_decompress_safe(reinterpret_cast<const char*>(src), reinterpret_cast<char*>(dst), static_cast<int>(src_size), static_cast<int>(dst_size)) == static_cast<int>(dst_size);
+#else
+				return false;
+#endif
+			case cas_codec::zstd:
+			{
+				const usz out_size = ZSTD_decompress(dst, dst_size, src, src_size);
+				return !ZSTD_isError(out_size) && out_size == dst_size;
+			}
+			default:
+				return false;
+			}
+		}
+	}
+
+	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension, cas_cache_tier tier, cas_codec codec)
 	{
 		if (!data || !size)
 		{
@@ -188,19 +332,55 @@ namespace rpcs3::cache
 			return {};
 		}
 
-		const std::string hash_key = canonical_sha1_hex(data, size);
-		const std::string object_path = cas_root + hash_key;
-		(void)extension;
-
-		if (fs::stat_t st{}; fs::get_stat(object_path, st) && st.size == size)
+		if (tier == cas_cache_tier::auto_select)
 		{
-			return hash_key;
+			tier = infer_tier(extension);
 		}
 
-
-		if (!write_file_atomic(object_path, data, size))
+		if (codec == cas_codec::auto_select)
 		{
-			if (fs::stat_t existing{}; fs::get_stat(object_path, existing) && existing.size == size)
+			codec = infer_codec(tier);
+		}
+
+		const std::string hash_key = canonical_sha1_hex(data, size);
+		const std::string object_path = cas_root + hash_key;
+
+		if (fs::is_file(object_path))
+		{
+			std::vector<uchar> existing;
+			if (get_from_cas(hash_key, existing) && existing.size() == size && canonical_sha1_hex(existing.data(), existing.size()) == hash_key)
+			{
+				return hash_key;
+			}
+		}
+
+		std::vector<uchar> compressed;
+		cas_codec resolved_codec{};
+		if (!compress_blob(codec, reinterpret_cast<const uchar*>(data), size, compressed, resolved_codec))
+		{
+			sys_log.error("Failed to compress CAS object %s (codec=%u)", object_path, static_cast<u8>(codec));
+			return {};
+		}
+
+		cas_blob_header hdr{};
+		hdr.magic = s_cas_blob_magic;
+		hdr.version = s_cas_blob_version;
+		hdr.codec = static_cast<u8>(resolved_codec);
+		hdr.flags = s_cas_flag_checksum32;
+		hdr.uncompressed_size = size;
+		hdr.checksum32 = get_checksum32(data, size);
+
+		std::vector<uchar> object(sizeof(hdr) + compressed.size());
+		std::memcpy(object.data(), &hdr, sizeof(hdr));
+		if (!compressed.empty())
+		{
+			std::memcpy(object.data() + sizeof(hdr), compressed.data(), compressed.size());
+		}
+
+		if (!write_file_atomic(object_path, object.data(), object.size()))
+		{
+			std::vector<uchar> existing;
+			if (get_from_cas(hash_key, existing) && existing.size() == size && canonical_sha1_hex(existing.data(), existing.size()) == hash_key)
 			{
 				return hash_key;
 			}
@@ -234,8 +414,47 @@ namespace rpcs3::cache
 			return false;
 		}
 
-		out.resize(f.size());
-		return f.read(out.data(), out.size()) == out.size();
+		std::vector<uchar> in;
+		in.resize(f.size());
+		if (f.read(in.data(), in.size()) != in.size())
+		{
+			return false;
+		}
+
+		if (in.size() < sizeof(cas_blob_header))
+		{
+			out = std::move(in);
+			return true;
+		}
+
+		cas_blob_header hdr{};
+		std::memcpy(&hdr, in.data(), sizeof(hdr));
+		if (hdr.magic != s_cas_blob_magic)
+		{
+			out = std::move(in);
+			return true;
+		}
+
+		if (hdr.version != s_cas_blob_version || hdr.uncompressed_size > umax)
+		{
+			return false;
+		}
+
+		const usz payload_size = in.size() - sizeof(hdr);
+		const uchar* payload = in.data() + sizeof(hdr);
+		out.resize(static_cast<usz>(hdr.uncompressed_size));
+
+		if (!decompress_blob(static_cast<cas_codec>(hdr.codec), payload, payload_size, out.data(), out.size()))
+		{
+			return false;
+		}
+
+		if ((hdr.flags & s_cas_flag_checksum32) && get_checksum32(out.data(), out.size()) != hdr.checksum32)
+		{
+			return false;
+		}
+
+		return true;
 	}
 
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata, std::string_view compatibility_tuple, std::string_view format_version)
