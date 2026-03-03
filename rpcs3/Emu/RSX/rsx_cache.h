@@ -115,6 +115,34 @@ namespace rsx
 			return hash;
 		}
 
+		static rpcs3::cache::rsx_compatibility_decision get_manifest_compatibility_decision(const rpcs3::cache::manifest_record& rec, std::string_view expected_tuple)
+		{
+			if (const std::string_view persisted_reason = rpcs3::cache::get_manifest_reason_code(rec.metadata); !persisted_reason.empty())
+			{
+				if (persisted_reason == "exact" || persisted_reason == "settings_cosmetic")
+				{
+					return { rpcs3::cache::rsx_compatibility_mismatch_class::reusable, std::string(persisted_reason) };
+				}
+
+				if (persisted_reason == "settings_pipeline")
+				{
+					return { rpcs3::cache::rsx_compatibility_mismatch_class::rebuild_pipeline_only, std::string(persisted_reason) };
+				}
+
+				if (persisted_reason == "settings_raw")
+				{
+					return { rpcs3::cache::rsx_compatibility_mismatch_class::rebuild_raw_only, std::string(persisted_reason) };
+				}
+
+				if (persisted_reason == "schema_major" || persisted_reason == "backend" || persisted_reason == "driver_breakage")
+				{
+					return { rpcs3::cache::rsx_compatibility_mismatch_class::breaking, std::string(persisted_reason) };
+				}
+			}
+
+			return rpcs3::cache::compare_rsx_compatibility_tuples(rec.compatibility_tuple, expected_tuple);
+		}
+
 		void load_shaders(uint nb_workers, unpacked_type& unpacked, std::string& directory_path, std::vector<fs::dir_entry>& entries, u32 entry_count,
 		    shader_loading_dialog* dlg)
 		{
@@ -142,7 +170,13 @@ namespace rsx
 
 						rpcs3::cache::manifest_record idx_rec;
 						if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
-							|| !rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_pipeline_blob, compatibility_tuple, pipeline_format_version, rpcs3::cache::cas_cache_tier::hot))
+							|| !rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_pipeline_blob, {}, pipeline_format_version, rpcs3::cache::cas_cache_tier::hot))
+						{
+							continue;
+						}
+
+						const auto compatibility_decision = get_manifest_compatibility_decision(idx_rec, compatibility_tuple);
+						if (!compatibility_decision.reuse_pipeline())
 						{
 							continue;
 						}
@@ -383,14 +417,14 @@ namespace rsx
 			if (!fp_cas.empty())
 			{
 				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
-				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, fp_cas, rpcs3::cache::make_manifest_metadata_with_reason(fp.ucode_length, "exact"), compatibility_tuple, raw_program_format_version));
 				rpcs3::cache::record_catalog_reference("rsx", std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob)), fp_cas, compatibility_tuple, raw_program_format_version, compatibility_tuple + "|ns=" + version_prefix);
 			}
 
 			if (!vp_cas.empty())
 			{
 				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
-				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, vp_cas, rpcs3::cache::make_manifest_metadata_with_reason(vp.data.size() * sizeof(u32), "exact"), compatibility_tuple, raw_program_format_version));
 				rpcs3::cache::record_catalog_reference("rsx", std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob)), vp_cas, compatibility_tuple, raw_program_format_version, compatibility_tuple + "|ns=" + version_prefix);
 			}
 
@@ -417,7 +451,7 @@ namespace rsx
 			const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
 			if (const std::string pipeline_cas = rpcs3::cache::put_to_cas(&data, sizeof(data), rpcs3::cache::cas_artifact_type::rsx_pipeline_blob); !pipeline_cas.empty())
 			{
-				rpcs3::cache::write_text_file_atomic(pipeline_path, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_pipeline_blob, pipeline_cas, std::to_string(sizeof(data)), compatibility_tuple, pipeline_format_version));
+				rpcs3::cache::write_text_file_atomic(pipeline_path, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_pipeline_blob, pipeline_cas, rpcs3::cache::make_manifest_metadata_with_reason(sizeof(data), "exact"), compatibility_tuple, pipeline_format_version));
 				rpcs3::cache::record_catalog_reference("rsx", std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::rsx_pipeline_blob)), pipeline_cas, compatibility_tuple, pipeline_format_version, compatibility_tuple + "|ns=" + version_prefix);
 			}
 		}
@@ -440,12 +474,24 @@ namespace rsx
 				return vp;
 			}
 			rpcs3::cache::manifest_record idx_rec;
-			if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
-				|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm)
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, "rsx-raw-program-v1")
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple_legacy, "rsx-raw-program-v1")))
+			const bool is_modern_record = rpcs3::cache::parse_manifest_record(rec, idx_rec)
+				&& rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, {}, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm);
+			const bool is_legacy_record = !is_modern_record
+				&& rpcs3::cache::parse_manifest_record(rec, idx_rec)
+				&& (rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, "rsx-raw-program-v1")
+					|| rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple_legacy, "rsx-raw-program-v1"));
+			if (!is_modern_record && !is_legacy_record)
 			{
 				return vp;
+			}
+
+			if (is_modern_record)
+			{
+				const auto compatibility_decision = get_manifest_compatibility_decision(idx_rec, compatibility_tuple);
+				if (!compatibility_decision.reuse_raw())
+				{
+					return vp;
+				}
 			}
 			std::vector<u8> bytes;
 			if (!rpcs3::cache::get_from_cas(idx_rec.hash_key, bytes) || bytes.size() % sizeof(u32))
@@ -475,11 +521,27 @@ namespace rsx
 					return fp;
 				}
 				rpcs3::cache::manifest_record idx_rec;
-				if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
-					|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm)
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, "rsx-raw-program-v1")
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple_legacy, "rsx-raw-program-v1"))
-					|| !rpcs3::cache::get_from_cas(idx_rec.hash_key, cas_bytes))
+				const bool is_modern_record = rpcs3::cache::parse_manifest_record(rec, idx_rec)
+					&& rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, {}, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm);
+				const bool is_legacy_record = !is_modern_record
+					&& rpcs3::cache::parse_manifest_record(rec, idx_rec)
+					&& (rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, "rsx-raw-program-v1")
+						|| rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple_legacy, "rsx-raw-program-v1"));
+				if (!is_modern_record && !is_legacy_record)
+				{
+					return fp;
+				}
+
+				if (is_modern_record)
+				{
+					const auto compatibility_decision = get_manifest_compatibility_decision(idx_rec, compatibility_tuple);
+					if (!compatibility_decision.reuse_raw())
+					{
+						return fp;
+					}
+				}
+
+				if (!rpcs3::cache::get_from_cas(idx_rec.hash_key, cas_bytes))
 				{
 					return fp;
 				}
