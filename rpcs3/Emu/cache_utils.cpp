@@ -6,6 +6,7 @@
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Crypto/sha1.h"
 
 LOG_CHANNEL(sys_log, "SYS");
 
@@ -22,6 +23,98 @@ namespace rpcs3::cache
 		}
 
 		return _main->cache;
+	}
+
+
+
+	std::string get_shared_cas_root()
+	{
+		std::string path = rpcs3::utils::get_cache_dir() + "cas/";
+		if (!fs::is_dir(path) && !fs::create_path(path))
+		{
+			sys_log.error("Failed to initialize shared CAS root %s (%s)", path, fs::g_tls_error);
+			return {};
+		}
+
+		return path;
+	}
+
+	static std::string canonical_sha1_hex(const void* data, std::size_t size)
+	{
+		sha1_context ctx;
+		u8 digest[20]{};
+		sha1_starts(&ctx);
+		sha1_update(&ctx, reinterpret_cast<const u8*>(data), size);
+		sha1_finish(&ctx, digest);
+		std::string out;
+		out.reserve(40);
+		for (const u8 b : digest)
+		{
+			fmt::append(out, "%02x", b);
+		}
+		return out;
+	}
+
+	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension)
+	{
+		if (!data || !size)
+		{
+			return {};
+		}
+
+		const std::string cas_root = get_shared_cas_root();
+		if (cas_root.empty())
+		{
+			return {};
+		}
+
+		const std::string hash_key = canonical_sha1_hex(data, size);
+		const std::string object_path = cas_root + hash_key;
+		(void)extension;
+
+		if (fs::stat_t st{}; fs::get_stat(object_path, st) && st.size == size)
+		{
+			return hash_key;
+		}
+
+		if (!fs::write_file(object_path, fs::rewrite, data, size))
+		{
+			sys_log.error("Failed to write CAS object %s (%s)", object_path, fs::g_tls_error);
+			return {};
+		}
+
+		return hash_key;
+	}
+
+	bool get_from_cas(const std::string& hash_key, std::vector<uchar>& out)
+	{
+		const std::string cas_root = get_shared_cas_root();
+		if (cas_root.empty())
+		{
+			return false;
+		}
+
+		const std::string path = cas_root + hash_key;
+		fs::file f(path);
+		if (!f)
+		{
+			return false;
+		}
+
+		out.resize(f.size());
+		return f.read(out.data(), out.size()) == out.size();
+	}
+
+	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata)
+	{
+		std::string record = fmt::format("%s|%s", artifact_type, hash_key);
+		if (!metadata.empty())
+		{
+			record += "|";
+			record += metadata;
+		}
+		record += "\n";
+		return record;
 	}
 
 	void limit_cache_size()
