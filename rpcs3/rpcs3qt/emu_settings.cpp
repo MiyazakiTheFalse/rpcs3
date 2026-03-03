@@ -1343,6 +1343,13 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case audio_channel_layout::surround_7_1:     return tr("Surround 7.1", "Audio Channel Layout");
 		}
 		break;
+	case emu_settings_type::AudioLatencyProfile:
+		switch (static_cast<audio_latency_profile>(index))
+		{
+		case audio_latency_profile::accurate: return tr("Accurate", "Audio Latency Profile");
+		case audio_latency_profile::low_latency: return tr("Low-latency", "Audio Latency Profile");
+		}
+		break;
 	case emu_settings_type::LicenseArea:
 		switch (static_cast<CellSysutilLicenseArea>(index))
 		{
