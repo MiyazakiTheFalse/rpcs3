@@ -130,6 +130,7 @@ namespace rpcs3::cache
 		s64 score = 0;
 		bool full_reuse = false;
 		bool partial_rebuild = false;
+		std::string run_reason;
 		std::vector<run_mismatch> mismatches;
 	};
 
@@ -155,6 +156,7 @@ namespace rpcs3::cache
 	run_match_result find_best_run_match(std::string_view title_id, std::string_view current_settings_fingerprint, std::string_view current_gpu_fingerprint, const run_match_options& options = {});
 	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned);
 	bool set_current_run_pinned(bool pinned);
+	bool set_current_run_reason(std::string_view run_reason);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);
 	bool parse_compatibility_tuple(std::string_view tuple, parsed_compatibility_tuple& out);
 	rsx_compatibility_decision compare_rsx_compatibility_tuples(std::string_view actual_tuple, std::string_view expected_tuple);

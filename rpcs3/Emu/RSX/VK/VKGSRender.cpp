@@ -598,12 +598,34 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	else
 		m_vertex_cache = std::make_unique<vk::weak_vertex_cache>();
 
+	const auto driver_vendor_to_string = [](vk::driver_vendor vendor)
+	{
+		switch (vendor)
+		{
+		case vk::driver_vendor::NVIDIA: return "nvidia";
+		case vk::driver_vendor::RADV: return "radv";
+		case vk::driver_vendor::AMD: return "amd";
+		case vk::driver_vendor::NVK: return "nvk";
+		case vk::driver_vendor::INTEL: return "intel";
+		case vk::driver_vendor::ANV: return "anv";
+		case vk::driver_vendor::DOZEN: return "dozen";
+		case vk::driver_vendor::MVK: return "mvk";
+		default: return "unknown";
+		}
+	};
+	const auto chip_family_to_string = []()
+	{
+		return fmt::format("%u", static_cast<u32>(vk::get_chip_family()));
+	};
+
 	const std::string cache_platform_fields = rpcs3::cache::make_rsx_platform_fields("vulkan",
 	{
 		{"vendor_id", fmt::format("0x%x", m_device->gpu().get_vendor_id())},
 		{"device_id", fmt::format("0x%x", m_device->gpu().get_device_id())},
 		{"gpu", m_device->gpu().get_name()},
 		{"driver", m_device->gpu().get_driver_version()},
+		{"driver_vendor", driver_vendor_to_string(vk::get_driver_vendor())},
+		{"driver_family", chip_family_to_string()},
 	});
 	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "vulkan", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
 	rpcs3::cache::run_match_options run_match_options{};
@@ -617,6 +639,7 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 			rsx_log.notice("RSX catalog mismatch (%s): %s", mismatch.hard_constraint ? "hard" : "soft", mismatch.detail);
 		}
 	}
+	rpcs3::cache::set_current_run_reason(reuse_match.run_id.empty() ? "no_match" : reuse_match.run_reason);
 	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
 	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 
