@@ -3,7 +3,9 @@
 #include "util/types.hpp"
 #include <string>
 #include <set>
+#include <map>
 #include <optional>
+#include <functional>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +29,18 @@ namespace rpcs3::utils
 		save_data,
 		unknown,
 	};
+
+	struct game_data_database_result
+	{
+		u32 fixed_count = 0;
+		u32 warn_count = 0;
+		u32 failed_count = 0;
+		std::vector<std::string> affected_title_ids;
+		std::vector<std::string> stale_games_yml_serials;
+	};
+
+	using maintenance_progress_callback = std::function<void(u32, u32)>;
+	using maintenance_cancel_callback = std::function<bool()>;
 
 	u32 get_max_threads();
 
@@ -77,6 +91,8 @@ namespace rpcs3::utils
 
 	content_bucket classify_content_bucket(std::string_view category, std::string_view app_ver, std::string_view target_app_ver, std::optional<bool> bootable = std::nullopt);
 	content_bucket classify_title_dir(const std::string& dir_path, const std::string& expected_title_id = {});
+	game_data_database_result rebuild_game_data_database(const std::map<std::string, std::string>& games_yml_entries,
+		const maintenance_progress_callback& progress_cb = {}, const maintenance_cancel_callback& cancel_cb = {});
 
 	std::string get_rap_file_path(const std::string_view& rap);
 	bool verify_c00_unlock_edat(const std::string_view& content_id, bool fast = false);

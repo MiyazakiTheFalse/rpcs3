@@ -116,6 +116,7 @@ private Q_SLOTS:
 	void ResizeIcons(int index);
 
 	void CleanUpGameList();
+	void RebuildGameDataDatabase();
 
 	void RemoveFirmwareCache();
 	void CreateFirmwareCache();
