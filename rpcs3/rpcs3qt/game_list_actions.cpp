@@ -9,6 +9,7 @@
 #include "Utilities/File.h"
 
 #include "Emu/System.h"
+#include "Emu/cache_utils.hpp"
 #include "Emu/system_utils.hpp"
 #include "Emu/VFS.h"
 #include "Emu/vfs_config.h"
@@ -16,11 +17,16 @@
 #include "Input/pad_thread.h"
 
 #include <array>
+#include <chrono>
+#include <optional>
+#include <sstream>
+#include <unordered_set>
 #include <QApplication>
 #include <QCheckBox>
 #include <QtConcurrent>
 #include <QDir>
 #include <QDirIterator>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QMessageBox>
 #include <QTimer>
@@ -60,6 +66,138 @@ namespace
 				return bucket_it->second;
 		}
 		return {};
+	}
+
+	u64 remove_manifest_or_index_files(const QString& base_dir, const QStringList& filters, const char* description, bool& success)
+	{
+		u32 files_removed = 0;
+		u32 files_total = 0;
+		u64 removed_size = 0;
+		success = true;
+
+		QDirIterator dir_iter(base_dir, filters, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+
+		while (dir_iter.hasNext())
+		{
+			const QString filepath = dir_iter.next();
+
+			if (QFileInfo fi(filepath); fi.exists())
+			{
+				removed_size += fi.size();
+			}
+
+			if (QFile::remove(filepath))
+			{
+				++files_removed;
+				game_list_log.notice("Removed %s file: %s", description, filepath);
+			}
+			else
+			{
+				success = false;
+				game_list_log.warning("Could not remove %s file: %s", description, filepath);
+			}
+
+			++files_total;
+		}
+
+		if (files_removed != files_total)
+		{
+			success = false;
+		}
+
+		return removed_size;
+	}
+
+	bool should_scan_manifest_file(const std::string& path)
+	{
+		return path.ends_with(".manifest") || path.ends_with(".fpidx") || path.ends_with(".vpidx") || fs::get_file_name(path) == "manifest.index";
+	}
+
+	std::unordered_set<std::string> collect_reachable_cas_hashes()
+	{
+		std::unordered_set<std::string> reachable;
+		const std::string cache_root = rpcs3::utils::get_cache_dir();
+		const std::string cas_root = rpcs3::cache::get_shared_cas_root();
+
+		if (cache_root.empty())
+			return reachable;
+
+		const QString q_cache_root = QString::fromStdString(cache_root);
+		QDirIterator file_iter(q_cache_root, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+
+		while (file_iter.hasNext())
+		{
+			const QString q_file_path = file_iter.next();
+			const std::string file_path = q_file_path.toStdString();
+			if (file_path.starts_with(cas_root) || !should_scan_manifest_file(file_path))
+				continue;
+
+			std::string content;
+			if (!fs::read_file(file_path, content))
+				continue;
+
+			std::istringstream lines(content);
+			for (std::string line; std::getline(lines, line);)
+			{
+				if (line.empty())
+					continue;
+
+				rpcs3::cache::manifest_record rec;
+				if (rpcs3::cache::parse_manifest_record(line, rec) && rec.hash_key.size() == 40)
+				{
+					reachable.emplace(std::move(rec.hash_key));
+				}
+			}
+		}
+
+		return reachable;
+	}
+
+	u64 collect_orphaned_cas(u32* removed_count = nullptr, std::optional<u64> min_age_seconds = std::nullopt)
+	{
+		const std::string cas_root = rpcs3::cache::get_shared_cas_root();
+		if (cas_root.empty())
+			return 0;
+
+		const auto reachable = collect_reachable_cas_hashes();
+		u64 reclaimed_size = 0;
+		u32 removed = 0;
+
+		const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+		fs::dir cas_dir(cas_root);
+		if (!cas_dir)
+			return 0;
+
+		for (const auto& item : cas_dir)
+		{
+			if (item.is_directory || item.name == "." || item.name == ".." || item.name.size() != 40)
+				continue;
+
+			if (reachable.contains(item.name))
+				continue;
+
+			if (min_age_seconds && item.mtime > 0)
+			{
+				const u64 age = now > item.mtime ? static_cast<u64>(now - item.mtime) : 0;
+				if (age < *min_age_seconds)
+					continue;
+			}
+
+			const std::string blob_path = cas_root + item.name;
+			if (!fs::remove_file(blob_path))
+			{
+				game_list_log.warning("Could not remove unreachable CAS blob: %s", blob_path);
+				continue;
+			}
+
+			reclaimed_size += item.size;
+			++removed;
+		}
+
+		if (removed_count)
+			*removed_count = removed;
+
+		return reclaimed_size;
 	}
 }
 
@@ -579,45 +717,18 @@ bool game_list_actions::RemoveShaderCache(const std::string& serial, bool is_int
 	if (!ValidateRemoval(serial, base_dir, "shader cache", is_interactive))
 		return true;
 
-	u32 caches_removed = 0;
-	u32 caches_total   = 0;
-
-	const QStringList filter{ QStringLiteral("shaders_cache") };
 	const QString q_base_dir = QString::fromStdString(base_dir);
+	const QStringList filter{ QStringLiteral("*.fpidx"), QStringLiteral("*.vpidx") };
 
-	QDirIterator dir_iter(q_base_dir, filter, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-
-	while (dir_iter.hasNext())
-	{
-		const QString filepath = dir_iter.next();
-
-		if (QDir(filepath).removeRecursively())
-		{
-			++caches_removed;
-			game_list_log.notice("Removed shader cache directory: %s", filepath);
-		}
-		else
-		{
-			game_list_log.warning("Could not completely remove shader cache directory: %s", filepath);
-		}
-
-		++caches_total;
-	}
-
-	const bool success = caches_total == caches_removed;
+	bool success = true;
+	const u64 entry_reclaimed_size = remove_manifest_or_index_files(q_base_dir, filter, "shader cache index", success);
+	u32 removed_blobs = 0;
+	const u64 blob_reclaimed_size = collect_orphaned_cas(&removed_blobs);
 
 	if (success)
-		game_list_log.success("Removed shader cache in %s", base_dir);
+		game_list_log.success("Removed shader cache index entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 	else
-		game_list_log.fatal("Only %d/%d shader cache directories could be removed in %s", caches_removed, caches_total, base_dir);
-
-	if (QDir(q_base_dir).isEmpty())
-	{
-		if (fs::remove_dir(base_dir))
-			game_list_log.notice("Removed empty shader cache directory: %s", base_dir);
-		else
-			game_list_log.error("Could not remove empty shader cache directory: '%s' (%s)", base_dir, fs::g_tls_error);
-	}
+		game_list_log.fatal("Could not completely remove shader cache index entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 
 	return success;
 }
@@ -629,45 +740,18 @@ bool game_list_actions::RemovePPUCache(const std::string& serial, bool is_intera
 	if (!ValidateRemoval(serial, base_dir, "PPU cache", is_interactive))
 		return true;
 
-	u32 files_removed = 0;
-	u32 files_total = 0;
-
-	const QStringList filter{ QStringLiteral("v*.obj"), QStringLiteral("v*.obj.gz") };
+	const QStringList filter{ QStringLiteral("manifest.index") };
 	const QString q_base_dir = QString::fromStdString(base_dir);
 
-	QDirIterator dir_iter(q_base_dir, filter, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-
-	while (dir_iter.hasNext())
-	{
-		const QString filepath = dir_iter.next();
-
-		if (QFile::remove(filepath))
-		{
-			++files_removed;
-			game_list_log.notice("Removed PPU cache file: %s", filepath);
-		}
-		else
-		{
-			game_list_log.warning("Could not remove PPU cache file: %s", filepath);
-		}
-
-		++files_total;
-	}
-
-	const bool success = files_total == files_removed;
+	bool success = true;
+	const u64 entry_reclaimed_size = remove_manifest_or_index_files(q_base_dir, filter, "PPU manifest", success);
+	u32 removed_blobs = 0;
+	const u64 blob_reclaimed_size = collect_orphaned_cas(&removed_blobs);
 
 	if (success)
-		game_list_log.success("Removed PPU cache in %s", base_dir);
+		game_list_log.success("Removed PPU manifest entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 	else
-		game_list_log.fatal("Only %d/%d PPU cache files could be removed in %s", files_removed, files_total, base_dir);
-
-	if (QDir(q_base_dir).isEmpty())
-	{
-		if (fs::remove_dir(base_dir))
-			game_list_log.notice("Removed empty PPU cache directory: %s", base_dir);
-		else
-			game_list_log.error("Could not remove empty PPU cache directory: '%s' (%s)", base_dir, fs::g_tls_error);
-	}
+		game_list_log.fatal("Could not completely remove PPU manifest entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 
 	return success;
 }
@@ -679,45 +763,18 @@ bool game_list_actions::RemoveSPUCache(const std::string& serial, bool is_intera
 	if (!ValidateRemoval(serial, base_dir, "SPU cache", is_interactive))
 		return true;
 
-	u32 files_removed = 0;
-	u32 files_total = 0;
-
-	const QStringList filter{ QStringLiteral("spu*.dat"), QStringLiteral("spu*.dat.gz"), QStringLiteral("spu*.obj"), QStringLiteral("spu*.obj.gz") };
+	const QStringList filter{ QStringLiteral("*.manifest") };
 	const QString q_base_dir = QString::fromStdString(base_dir);
 
-	QDirIterator dir_iter(q_base_dir, filter, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-
-	while (dir_iter.hasNext())
-	{
-		const QString filepath = dir_iter.next();
-
-		if (QFile::remove(filepath))
-		{
-			++files_removed;
-			game_list_log.notice("Removed SPU cache file: %s", filepath);
-		}
-		else
-		{
-			game_list_log.warning("Could not remove SPU cache file: %s", filepath);
-		}
-
-		++files_total;
-	}
-
-	const bool success = files_total == files_removed;
+	bool success = true;
+	const u64 entry_reclaimed_size = remove_manifest_or_index_files(q_base_dir, filter, "SPU manifest", success);
+	u32 removed_blobs = 0;
+	const u64 blob_reclaimed_size = collect_orphaned_cas(&removed_blobs);
 
 	if (success)
-		game_list_log.success("Removed SPU cache in %s", base_dir);
+		game_list_log.success("Removed SPU manifest entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 	else
-		game_list_log.fatal("Only %d/%d SPU cache files could be removed in %s", files_removed, files_total, base_dir);
-
-	if (QDir(q_base_dir).isEmpty())
-	{
-		if (fs::remove_dir(base_dir))
-			game_list_log.notice("Removed empty SPU cache directory: %s", base_dir);
-		else
-			game_list_log.error("Could not remove empty SPU cache directory: '%s' (%s)", base_dir, fs::g_tls_error);
-	}
+		game_list_log.fatal("Could not completely remove SPU manifest entries in %s (reclaimed %s, %u CAS blobs)", base_dir, gui::utils::format_byte_size(entry_reclaimed_size + blob_reclaimed_size), removed_blobs);
 
 	return success;
 }
@@ -770,25 +827,11 @@ bool game_list_actions::RemoveAllCaches(const std::string& serial, bool is_inter
 	if (!ValidateRemoval(serial, fs::get_config_dir(), "all caches", is_interactive))
 		return true;
 
-	const std::string base_dir = rpcs3::utils::get_cache_dir_by_serial(serial);
-
-	if (!ValidateRemoval(serial, base_dir, "main cache", false)) // no interation needed here
-		return true;
-
-	bool success = false;
-
-	if (fs::remove_all(base_dir))
-	{
-		success = true;
-		game_list_log.success("Removed main cache in %s", base_dir);
-
-	}
-	else
-	{
-		game_list_log.fatal("Could not completely remove main cache in %s (%s)", base_dir, serial);
-	}
-
-	success |= RemoveHDD1Cache(serial);
+	bool success = true;
+	success &= RemoveShaderCache(serial);
+	success &= RemovePPUCache(serial);
+	success &= RemoveSPUCache(serial);
+	success &= RemoveHDD1Cache(serial);
 
 	return success;
 }
