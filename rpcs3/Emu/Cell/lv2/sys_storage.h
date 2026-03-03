@@ -2,6 +2,7 @@
 
 #include "Emu/Memory/vm_ptr.h"
 #include "Emu/Cell/ErrorCodes.h"
+#include "Emu/Cell/PPUThread.h"
 
 enum Devices : u64
 {
@@ -64,9 +65,9 @@ error_code sys_storage_read(u32 fd, u32 mode, u32 start_sector, u32 num_sectors,
 error_code sys_storage_write(u32 fd, u32 mode, u32 start_sector, u32 num_sectors, vm::ptr<void> data, vm::ptr<u32> sectors_wrote, u64 flags);
 error_code sys_storage_send_device_command(u32 dev_handle, u64 cmd, vm::ptr<void> in, u64 inlen, vm::ptr<void> out, u64 outlen);
 error_code sys_storage_async_configure(u32 fd, u32 io_buf, u32 equeue_id, u32 unk);
-error_code sys_storage_async_read();
-error_code sys_storage_async_write();
-error_code sys_storage_async_cancel();
+error_code sys_storage_async_read(ppu_thread& ppu);
+error_code sys_storage_async_write(ppu_thread& ppu);
+error_code sys_storage_async_cancel(ppu_thread& ppu);
 error_code sys_storage_get_device_info(u64 device, vm::ptr<StorageDeviceInfo> buffer);
 error_code sys_storage_get_device_config(vm::ptr<u32> storages, vm::ptr<u32> devices);
 error_code sys_storage_report_devices(u32 storages, u32 start, u32 devices, vm::ptr<u64> device_ids);
@@ -79,4 +80,4 @@ error_code sys_storage_check_region_acl();
 error_code sys_storage_set_region_acl();
 error_code sys_storage_async_send_device_command(u32 dev_handle, u64 cmd, vm::ptr<void> in, u64 inlen, vm::ptr<void> out, u64 outlen, u64 unk);
 error_code sys_storage_get_region_offset();
-error_code sys_storage_set_emulated_speed();
+error_code sys_storage_set_emulated_speed(ppu_thread& ppu);
