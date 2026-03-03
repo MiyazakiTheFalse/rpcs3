@@ -5363,6 +5363,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 							rec.value.compatibility_tuple = get_ppu_cache_compatibility_tuple();
 							rec.value.format_version = std::string(s_ppu_manifest_format_version);
 							rec.value.tier = std::to_string(static_cast<u8>(rpcs3::cache::get_default_tier_for_artifact(rpcs3::cache::cas_artifact_type::ppu_object_blob)));
+							rpcs3::cache::record_catalog_reference("ppu", rec.value.artifact_type, rec.value.hash_key, rec.value.compatibility_tuple, rec.value.format_version, rec.value.compatibility_tuple);
 							manifest_records.push_back(std::move(rec));
 						}
 					}

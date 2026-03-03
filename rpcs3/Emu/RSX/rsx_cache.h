@@ -355,12 +355,14 @@ namespace rsx
 			{
 				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
 				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::record_catalog_reference("rsx", std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob)), fp_cas, compatibility_tuple, raw_program_format_version, compatibility_tuple + "|ns=" + version_prefix);
 			}
 
 			if (!vp_cas.empty())
 			{
 				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
 				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::record_catalog_reference("rsx", std::string(rpcs3::cache::to_manifest_artifact_name(rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob)), vp_cas, compatibility_tuple, raw_program_format_version, compatibility_tuple + "|ns=" + version_prefix);
 			}
 
 			const u32 state_params[] =
