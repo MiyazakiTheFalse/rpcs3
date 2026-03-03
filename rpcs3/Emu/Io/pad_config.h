@@ -29,6 +29,8 @@ struct cfg_pad final : cfg::node
 	static std::string get_buttons(std::vector<std::string> vec);
 
 	u8 get_motor_speed(VibrateMotor& motor, f32 multiplier) const;
+	f32 get_motor_curve_adjustment(f32 normalized_value) const;
+	f32 get_motor_smoothing_lerp(const VibrateMotor& motor, bool is_rising) const;
 	u8 get_large_motor_speed(std::array<VibrateMotor, 2>& motors) const;
 	u8 get_small_motor_speed(std::array<VibrateMotor, 2>& motors) const;
 
@@ -104,6 +106,14 @@ struct cfg_pad final : cfg::node
 	cfg::uint<0, 200> multiplier_vibration_motor_small{ this, "Small Vibration Motor Multiplier", 100 };
 	cfg::_bool switch_vibration_motors{ this, "Switch Vibration Motors", false };
 	cfg::uint<0, 255> vibration_threshold{ this, "Vibration Threshold", MOTOR_THRESHOLD };
+
+	cfg::_enum<motor_curve_type> vibration_curve_type{ this, "Vibration Curve Type", motor_curve_type::linear };
+	cfg::uint<0, 200> vibration_curve_strength{ this, "Vibration Curve Strength", 100 };
+	cfg::_float<0.1, 10.0> vibration_curve_custom_gamma{ this, "Vibration Curve Custom Gamma", 1.0f };
+	cfg::uint<0, 100> vibration_large_attack_lerp{ this, "Large Vibration Attack Lerp", 100 };
+	cfg::uint<0, 100> vibration_large_decay_lerp{ this, "Large Vibration Decay Lerp", 100 };
+	cfg::uint<0, 100> vibration_small_attack_lerp{ this, "Small Vibration Attack Lerp", 100 };
+	cfg::uint<0, 100> vibration_small_decay_lerp{ this, "Small Vibration Decay Lerp", 100 };
 
 	cfg::_enum<mouse_movement_mode> mouse_move_mode{ this, "Mouse Movement Mode", mouse_movement_mode::relative };
 	cfg::uint<0, 255> mouse_deadzone_x{ this, "Mouse Deadzone X Axis", 60 };

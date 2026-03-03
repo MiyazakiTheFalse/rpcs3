@@ -45,3 +45,21 @@ void fmt_class_string<mouse_movement_mode>::format(std::string& out, u64 arg)
 		return unknown;
 	});
 }
+
+
+template <>
+void fmt_class_string<motor_curve_type>::format(std::string& out, u64 arg)
+{
+	format_enum(out, arg, [](motor_curve_type value)
+	{
+		switch (value)
+		{
+		case motor_curve_type::linear: return "Linear";
+		case motor_curve_type::logarithmic: return "Logarithmic";
+		case motor_curve_type::exponential: return "Exponential";
+		case motor_curve_type::custom_gamma: return "Custom Gamma";
+		}
+
+		return unknown;
+	});
+}

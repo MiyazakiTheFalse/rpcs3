@@ -195,6 +195,11 @@ pad_settings_dialog::pad_settings_dialog(std::shared_ptr<gui_settings> gui_setti
 	ui->mouse_movement->addItem(tr("Relative"), static_cast<int>(mouse_movement_mode::relative));
 	ui->mouse_movement->addItem(tr("Absolute"), static_cast<int>(mouse_movement_mode::absolute));
 
+	ui->cb_vibration_curve_type->addItem(tr("Linear"), static_cast<int>(motor_curve_type::linear));
+	ui->cb_vibration_curve_type->addItem(tr("Logarithmic"), static_cast<int>(motor_curve_type::logarithmic));
+	ui->cb_vibration_curve_type->addItem(tr("Exponential"), static_cast<int>(motor_curve_type::exponential));
+	ui->cb_vibration_curve_type->addItem(tr("Custom Gamma"), static_cast<int>(motor_curve_type::custom_gamma));
+
 	// Initialize configurable buttons
 	InitButtons();
 
@@ -1165,6 +1170,30 @@ void pad_settings_dialog::UpdateLabels(bool is_reset)
 
 		ui->chb_vibration_switch->setChecked(cfg.switch_vibration_motors.get());
 
+		{
+			const int vibration_curve_index = ui->cb_vibration_curve_type->findData(static_cast<int>(cfg.vibration_curve_type.get()));
+			ensure(vibration_curve_index >= 0);
+			ui->cb_vibration_curve_type->setCurrentIndex(vibration_curve_index);
+		}
+
+		ui->sb_vibration_curve_strength->setRange(cfg.vibration_curve_strength.min, cfg.vibration_curve_strength.max);
+		ui->sb_vibration_curve_strength->setValue(cfg.vibration_curve_strength.get());
+
+		{
+			const auto range = cfg.vibration_curve_custom_gamma.to_list();
+			ui->dsb_vibration_curve_gamma->setRange(std::stod(range.front()), std::stod(range.back()));
+		}
+		ui->dsb_vibration_curve_gamma->setValue(cfg.vibration_curve_custom_gamma.get());
+
+		ui->sb_vibration_large_attack->setRange(cfg.vibration_large_attack_lerp.min, cfg.vibration_large_attack_lerp.max);
+		ui->sb_vibration_large_attack->setValue(cfg.vibration_large_attack_lerp.get());
+		ui->sb_vibration_large_decay->setRange(cfg.vibration_large_decay_lerp.min, cfg.vibration_large_decay_lerp.max);
+		ui->sb_vibration_large_decay->setValue(cfg.vibration_large_decay_lerp.get());
+		ui->sb_vibration_small_attack->setRange(cfg.vibration_small_attack_lerp.min, cfg.vibration_small_attack_lerp.max);
+		ui->sb_vibration_small_attack->setValue(cfg.vibration_small_attack_lerp.get());
+		ui->sb_vibration_small_decay->setRange(cfg.vibration_small_decay_lerp.min, cfg.vibration_small_decay_lerp.max);
+		ui->sb_vibration_small_decay->setValue(cfg.vibration_small_decay_lerp.get());
+
 		// Update Trigger Thresholds
 		ui->preview_trigger_left->setRange(0, m_handler->trigger_max);
 		ui->slider_trigger_left->setRange(0, m_handler->trigger_max);
@@ -2049,6 +2078,13 @@ void pad_settings_dialog::ApplyCurrentPlayerConfig(int new_player_id)
 		cfg.multiplier_vibration_motor_small.set(ui->sb_vibration_small->value());
 		cfg.vibration_threshold.set(ui->sb_vibration_threshold->value());
 		cfg.switch_vibration_motors.set(ui->chb_vibration_switch->isChecked());
+		cfg.vibration_curve_type.set(static_cast<motor_curve_type>(ui->cb_vibration_curve_type->currentData().toInt()));
+		cfg.vibration_curve_strength.set(ui->sb_vibration_curve_strength->value());
+		cfg.vibration_curve_custom_gamma.set(ui->dsb_vibration_curve_gamma->value());
+		cfg.vibration_large_attack_lerp.set(ui->sb_vibration_large_attack->value());
+		cfg.vibration_large_decay_lerp.set(ui->sb_vibration_large_decay->value());
+		cfg.vibration_small_attack_lerp.set(ui->sb_vibration_small_attack->value());
+		cfg.vibration_small_decay_lerp.set(ui->sb_vibration_small_decay->value());
 	}
 
 	if (m_handler->has_deadzones())

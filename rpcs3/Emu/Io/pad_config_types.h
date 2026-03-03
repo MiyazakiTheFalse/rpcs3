@@ -29,6 +29,14 @@ enum class mouse_movement_mode : s32
 	absolute = 1
 };
 
+enum class motor_curve_type : s32
+{
+	linear = 0,
+	logarithmic = 1,
+	exponential = 2,
+	custom_gamma = 3,
+};
+
 struct PadInfo
 {
 	u32 now_connect = 0;

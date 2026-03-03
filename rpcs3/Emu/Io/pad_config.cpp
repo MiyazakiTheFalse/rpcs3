@@ -31,6 +31,46 @@ std::string cfg_pad::get_buttons(std::vector<std::string> vec)
 	return fmt::merge(vec, ",");
 }
 
+f32 cfg_pad::get_motor_curve_adjustment(f32 normalized_value) const
+{
+	normalized_value = std::clamp(normalized_value, 0.0f, 1.0f);
+
+	const motor_curve_type curve = vibration_curve_type.get();
+	if (curve == motor_curve_type::linear)
+	{
+		return normalized_value;
+	}
+
+	const f32 strength = std::clamp(vibration_curve_strength / 100.0f, 0.0f, 2.0f);
+	f32 curved = normalized_value;
+
+	switch (curve)
+	{
+	case motor_curve_type::linear:
+		break;
+	case motor_curve_type::logarithmic:
+		curved = std::log1p(9.0f * normalized_value) / std::log1p(9.0f);
+		break;
+	case motor_curve_type::exponential:
+		curved = std::pow(normalized_value, 2.0f);
+		break;
+	case motor_curve_type::custom_gamma:
+		curved = std::pow(normalized_value, vibration_curve_custom_gamma.get());
+		break;
+	}
+
+	return std::clamp(normalized_value + (curved - normalized_value) * strength, 0.0f, 1.0f);
+}
+
+f32 cfg_pad::get_motor_smoothing_lerp(const VibrateMotor& motor, bool is_rising) const
+{
+	const u32 lerp = motor.is_large_motor
+		? (is_rising ? vibration_large_attack_lerp.get() : vibration_large_decay_lerp.get())
+		: (is_rising ? vibration_small_attack_lerp.get() : vibration_small_decay_lerp.get());
+
+	return std::clamp(static_cast<f32>(lerp) / 100.0f, 0.0f, 1.0f);
+}
+
 u8 cfg_pad::get_motor_speed(VibrateMotor& motor, f32 multiplier) const
 {
 	// If motor is small, use either 0 or 255.
@@ -39,8 +79,17 @@ u8 cfg_pad::get_motor_speed(VibrateMotor& motor, f32 multiplier) const
 	// Ignore lower range. Scale remaining range to full range.
 	const f32 adjusted = PadHandlerBase::ScaledInput(value, static_cast<f32>(vibration_threshold.get()), 255.0f, 0.0f, 255.0f);
 
-	// Apply multiplier
-	motor.adjusted_value = static_cast<u8>(std::clamp(adjusted * multiplier, 0.0f, 255.0f));
+	// Apply curve + multiplier.
+	const f32 curved = get_motor_curve_adjustment(adjusted / 255.0f) * 255.0f;
+	const f32 target = std::clamp(curved * multiplier, 0.0f, 255.0f);
+
+	// Optional temporal smoothing based on previous adjusted output.
+	const f32 previous = static_cast<f32>(motor.adjusted_value);
+	const bool is_rising = target >= previous;
+	const f32 lerp = get_motor_smoothing_lerp(motor, is_rising);
+	const f32 smoothed = previous + ((target - previous) * lerp);
+
+	motor.adjusted_value = static_cast<u8>(std::clamp(smoothed, 0.0f, 255.0f));
 	return motor.adjusted_value;
 }
 

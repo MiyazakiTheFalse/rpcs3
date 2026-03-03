@@ -1005,6 +1005,88 @@
                      </item>
                     </layout>
                    </item>
+                   <item>
+                    <layout class="QHBoxLayout" name="h_layout_vibration_2">
+                     <item>
+                      <widget class="QLabel" name="l_vibration_curve_type">
+                       <property name="text">
+                        <string>Curve</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QComboBox" name="cb_vibration_curve_type"/>
+                     </item>
+                     <item>
+                      <widget class="QSpinBox" name="sb_vibration_curve_strength">
+                       <property name="prefix">
+                        <string>Strength </string>
+                       </property>
+                       <property name="suffix">
+                        <string>%</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QDoubleSpinBox" name="dsb_vibration_curve_gamma">
+                       <property name="prefix">
+                        <string>Gamma </string>
+                       </property>
+                       <property name="singleStep">
+                        <double>0.100000000000000</double>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
+                   <item>
+                    <layout class="QHBoxLayout" name="h_layout_vibration_3">
+                     <item>
+                      <widget class="QSpinBox" name="sb_vibration_large_attack">
+                       <property name="prefix">
+                        <string>Large Attack </string>
+                       </property>
+                       <property name="suffix">
+                        <string>%</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QSpinBox" name="sb_vibration_large_decay">
+                       <property name="prefix">
+                        <string>Large Decay </string>
+                       </property>
+                       <property name="suffix">
+                        <string>%</string>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
+                   <item>
+                    <layout class="QHBoxLayout" name="h_layout_vibration_4">
+                     <item>
+                      <widget class="QSpinBox" name="sb_vibration_small_attack">
+                       <property name="prefix">
+                        <string>Small Attack </string>
+                       </property>
+                       <property name="suffix">
+                        <string>%</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item>
+                      <widget class="QSpinBox" name="sb_vibration_small_decay">
+                       <property name="prefix">
+                        <string>Small Decay </string>
+                       </property>
+                       <property name="suffix">
+                        <string>%</string>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </item>
                   </layout>
                  </widget>
                 </item>
