@@ -716,13 +716,13 @@ void spu_cache::add(const spu_program& func)
 	std::memcpy(payload.data(), &size, sizeof(size));
 	std::memcpy(payload.data() + sizeof(size), &addr, sizeof(addr));
 	std::memcpy(payload.data() + sizeof(size) + sizeof(addr), func.data.data(), func.data.size() * 4);
-	if (const std::string cas = rpcs3::cache::put_to_cas(payload.data(), payload.size(), "spu"); !cas.empty())
+	if (const std::string cas = rpcs3::cache::put_to_cas(payload.data(), payload.size(), rpcs3::cache::cas_artifact_type::spu_function_blob); !cas.empty())
 	{
 		if (const std::string ppu_cache = rpcs3::cache::get_ppu_cache(); !ppu_cache.empty())
 		{
 			const std::string filename = get_spu_cache_filename();
 			rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
-				rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot));
+				rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::spu_function_blob, cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
 		}
 	}
 }
@@ -782,7 +782,7 @@ void spu_cache::initialize(bool build_existing_cache)
 				continue;
 			}
 
-			if (!rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, s_spu_manifest_format_version, rpcs3::cache::cas_codec::lz4, rpcs3::cache::cas_cache_tier::hot)
+			if (!rpcs3::cache::is_manifest_record_compatible(rec, rpcs3::cache::cas_artifact_type::spu_function_blob, expected_compatibility_tuple, s_spu_manifest_format_version, rpcs3::cache::cas_cache_tier::hot)
 				&& !rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, "spu-bin-v2"))
 			{
 				continue;
