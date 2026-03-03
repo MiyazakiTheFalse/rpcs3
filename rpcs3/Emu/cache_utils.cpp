@@ -9,6 +9,9 @@
 #include "Crypto/sha1.h"
 
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <zstd.h>
 
 #if __has_include(<lz4.h>)
@@ -146,6 +149,24 @@ namespace rpcs3::cache
 		return fmt::format("%s.tmp.%llu", target, s_tmp_counter++);
 	}
 
+	namespace
+	{
+		std::mutex s_manifest_append_map_mutex;
+		std::unordered_map<std::string, std::shared_ptr<std::mutex>> s_manifest_append_mutexes;
+
+		std::shared_ptr<std::mutex> get_manifest_append_mutex(const std::string& path)
+		{
+			std::lock_guard lock(s_manifest_append_map_mutex);
+			auto& path_mutex = s_manifest_append_mutexes[path];
+			if (!path_mutex)
+			{
+				path_mutex = std::make_shared<std::mutex>();
+			}
+
+			return path_mutex;
+		}
+	}
+
 	bool write_file_atomic(const std::string& path, const void* data, std::size_t size)
 	{
 		if (!data || !size)
@@ -202,10 +223,14 @@ namespace rpcs3::cache
 
 	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal)
 	{
+		// Invariant: all manifest writers (PPU/SPU/RSX) must use this API and must not append to manifest files directly.
 		if (record.empty())
 		{
 			return false;
 		}
+
+		const std::shared_ptr<std::mutex> path_mutex = get_manifest_append_mutex(path);
+		const std::lock_guard append_guard(*path_mutex);
 
 		const std::string journal_path = path + ".pending";
 		std::string pending;
