@@ -2,12 +2,26 @@
 
 This document defines the cross-domain compatibility tuple used for cache artifacts and manifests.
 
-## Global schema
+## Compatibility schema
 
-- **Emulator cache schema version**: `rpcs3::cache::emu_cache_schema_version` (`1` currently).
+- **Global fallback schema version**: `rpcs3::cache::emu_cache_schema_version` (`1` currently), used only as a fallback for unknown domains.
+- **Domain schema versions**:
+  - `rpcs3::cache::ppu_cache_schema_version` (`1` currently)
+  - `rpcs3::cache::spu_cache_schema_version` (`1` currently)
+  - `rpcs3::cache::rsx_cache_schema_version` (`1` currently)
 - Compatibility tuple format:
   - `schema=<N>|domain=<ppu|spu|rsx>|backend=<compiler/backend id>|platform=<platform fingerprint>`
 - The tuple is produced by `rpcs3::cache::make_compatibility_tuple(...)` and stored in manifest records where applicable.
+
+- `rpcs3::cache::make_compatibility_tuple(...)` now selects `schema=<N>` by `domain` (`ppu`/`spu`/`rsx`), so bumps can invalidate only the affected cache domain.
+- Unknown domains keep using the global fallback schema constant to preserve existing behavior for non-migrated users.
+
+### Domain-specific schema evolution policy
+
+- Bump only the domain constant corresponding to the artifacts whose compatibility contract changed.
+- Do not bump unrelated domains for isolated serializer/key changes.
+- Keep existing manifest fallback checks (older `format_version` / legacy artifact names) so rolling upgrades can still consume safe older entries.
+- Prefer additive evolution first (new manifest versions + fallback readers), then remove fallback once old entries are no longer expected in the field.
 
 ## Manifest record schema
 

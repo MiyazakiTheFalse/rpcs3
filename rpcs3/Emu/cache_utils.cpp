@@ -94,6 +94,26 @@ namespace rpcs3::cache
 		return fields;
 	}
 
+	static u32 get_schema_version_for_domain(std::string_view domain)
+	{
+		if (domain == "ppu")
+		{
+			return ppu_cache_schema_version;
+		}
+
+		if (domain == "spu")
+		{
+			return spu_cache_schema_version;
+		}
+
+		if (domain == "rsx")
+		{
+			return rsx_cache_schema_version;
+		}
+
+		return emu_cache_schema_version;
+	}
+
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields)
 	{
 		if (platform_fields.empty())
@@ -101,7 +121,7 @@ namespace rpcs3::cache
 			platform_fields = get_platform_cache_id();
 		}
 
-		return fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", emu_cache_schema_version, domain, backend_id, platform_fields);
+		return fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", get_schema_version_for_domain(domain), domain, backend_id, platform_fields);
 	}
 
 	static std::string canonical_sha1_hex(const void* data, std::size_t size)

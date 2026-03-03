@@ -616,10 +616,19 @@ static std::string get_spu_cache_filename()
 	return "spu-" + fmt::to_lower(g_cfg.core.spu_block_size.to_string()) + "-v2-tane.dat";
 }
 
+static std::string get_spu_cache_backend_id()
+{
+	return fmt::format("llvm-cpu=%s-precomp=%u", jit_compiler::cpu(g_cfg.core.llvm_cpu), g_cfg.core.llvm_precompilation ? 1u : 0u);
+}
+
 static std::string get_spu_cache_compatibility_tuple()
 {
-	const std::string backend_id = fmt::format("llvm-cpu=%s-precomp=%u", jit_compiler::cpu(g_cfg.core.llvm_cpu), g_cfg.core.llvm_precompilation ? 1u : 0u);
-	return rpcs3::cache::make_compatibility_tuple("spu", backend_id);
+	return rpcs3::cache::make_compatibility_tuple("spu", get_spu_cache_backend_id());
+}
+
+static std::string get_spu_cache_compatibility_tuple_legacy()
+{
+	return fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", 1u, "spu", get_spu_cache_backend_id(), rpcs3::cache::get_platform_cache_id());
 }
 
 static constexpr std::string_view s_spu_manifest_format_version = "spu-bin-v3";
@@ -752,6 +761,7 @@ void spu_cache::initialize(bool build_existing_cache)
 	const std::string manifest_loc = ppu_cache + filename + ".manifest";
 	const std::string loc_debug = fs::get_cache_dir() + "DEBUG/" + filename;
 	const std::string expected_compatibility_tuple = get_spu_cache_compatibility_tuple();
+	const std::string expected_compatibility_tuple_legacy = get_spu_cache_compatibility_tuple_legacy();
 
 	bool is_debug = false;
 
@@ -783,7 +793,8 @@ void spu_cache::initialize(bool build_existing_cache)
 			}
 
 			if (!rpcs3::cache::is_manifest_record_compatible(rec, rpcs3::cache::cas_artifact_type::spu_function_blob, expected_compatibility_tuple, s_spu_manifest_format_version, rpcs3::cache::cas_cache_tier::hot)
-				&& !rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, "spu-bin-v2"))
+				&& !rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple, "spu-bin-v2")
+				&& !rpcs3::cache::is_manifest_record_compatible(rec, "spu", expected_compatibility_tuple_legacy, "spu-bin-v2"))
 			{
 				continue;
 			}

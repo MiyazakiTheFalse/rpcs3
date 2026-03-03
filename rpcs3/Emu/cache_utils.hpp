@@ -12,6 +12,9 @@
 namespace rpcs3::cache
 {
 	inline constexpr u32 emu_cache_schema_version = 1;
+	inline constexpr u32 ppu_cache_schema_version = 1;
+	inline constexpr u32 spu_cache_schema_version = 1;
+	inline constexpr u32 rsx_cache_schema_version = 1;
 
 	enum class cas_codec : u8
 	{
