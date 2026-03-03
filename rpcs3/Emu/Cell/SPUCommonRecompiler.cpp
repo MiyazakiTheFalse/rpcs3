@@ -522,8 +522,31 @@ spu_cache::spu_cache(const std::string& loc)
 {
 }
 
+spu_cache::spu_cache(spu_cache&& other) noexcept
+{
+	std::scoped_lock lock(other.m_io_mutex);
+	m_file = std::move(other.m_file);
+	m_pending_entries = std::move(other.m_pending_entries);
+	m_buffer_adds = std::exchange(other.m_buffer_adds, false);
+}
+
+spu_cache& spu_cache::operator=(spu_cache&& other) noexcept
+{
+	if (this == &other)
+	{
+		return *this;
+	}
+
+	std::scoped_lock lock(m_io_mutex, other.m_io_mutex);
+	m_file = std::move(other.m_file);
+	m_pending_entries = std::move(other.m_pending_entries);
+	m_buffer_adds = std::exchange(other.m_buffer_adds, false);
+	return *this;
+}
+
 spu_cache::~spu_cache()
 {
+	flush_pending_entries();
 }
 
 extern void utilize_spu_data_segment(u32 vaddr, const void* ls_data_vaddr, u32 size)
@@ -633,6 +656,61 @@ static std::string get_spu_cache_compatibility_tuple_legacy()
 
 static constexpr std::string_view s_spu_manifest_format_version = "spu-bin-v3";
 
+namespace
+{
+	static std::array<u8, 20> calculate_sha1(std::span<const u8> bytes)
+	{
+		sha1_context ctx;
+		std::array<u8, 20> output{};
+
+		sha1_starts(&ctx);
+		sha1_update(&ctx, bytes.data(), bytes.size());
+		sha1_finish(&ctx, output.data());
+		return output;
+	}
+
+	static bool write_entry_locked(const fs::file& file, const std::vector<u8>& payload, u32 entry_point)
+	{
+		const fs::iovec_clone gather{payload.data(), payload.size()};
+		const u64 written = file.write_gather(&gather, 1);
+
+		if (written == payload.size())
+		{
+			return true;
+		}
+
+		spu_log.error("SPU cache: short write for entry 0x%05x (%u/%u bytes)", entry_point, written, payload.size());
+		return false;
+	}
+
+	static bool append_manifest_locked(const std::vector<u8>& payload, u32 entry_point)
+	{
+		const std::string cas = rpcs3::cache::put_to_cas(payload.data(), payload.size(), rpcs3::cache::cas_artifact_type::spu_function_blob);
+		if (cas.empty())
+		{
+			spu_log.error("SPU cache: failed to publish CAS payload for entry 0x%05x", entry_point);
+			return false;
+		}
+
+		const std::string ppu_cache = rpcs3::cache::get_ppu_cache();
+		if (ppu_cache.empty())
+		{
+			return true;
+		}
+
+		const std::string filename = get_spu_cache_filename();
+		const bool manifest_ok = rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
+			rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::spu_function_blob, cas, std::to_string(entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
+
+		if (!manifest_ok)
+		{
+			spu_log.error("SPU cache: failed to append manifest record for entry 0x%05x", entry_point);
+		}
+
+		return manifest_ok;
+	}
+}
+
 std::deque<spu_program> spu_cache::get()
 {
 	std::deque<spu_program> result;
@@ -642,6 +720,7 @@ std::deque<spu_program> spu_cache::get()
 		return result;
 	}
 
+	std::lock_guard lock(m_io_mutex);
 	m_file.seek(0);
 
 	// TODO: signal truncated or otherwise broken file
@@ -711,29 +790,73 @@ void spu_cache::add(const spu_program& func)
 	// Add CRC (forced non-zero)
 	size |= std::max<u32>(calculate_crc16(reinterpret_cast<const uchar*>(func.data.data()), size * 4), 1) << 16;
 
-	const fs::iovec_clone gather[3]
-	{
-		{&size, sizeof(size)},
-		{&addr, sizeof(addr)},
-		{func.data.data(), func.data.size() * 4}
-	};
+	pending_cache_entry entry{};
+	entry.entry_point = func.entry_point;
+	entry.payload.resize(sizeof(size) + sizeof(addr) + func.data.size() * 4);
+	std::memcpy(entry.payload.data(), &size, sizeof(size));
+	std::memcpy(entry.payload.data() + sizeof(size), &addr, sizeof(addr));
+	std::memcpy(entry.payload.data() + sizeof(size) + sizeof(addr), func.data.data(), func.data.size() * 4);
+	entry.payload_hash = calculate_sha1(entry.payload);
 
-	// Append data
-	m_file.write_gather(gather, 3);
+	std::lock_guard lock(m_io_mutex);
 
-	std::vector<u8> payload(sizeof(size) + sizeof(addr) + func.data.size() * 4);
-	std::memcpy(payload.data(), &size, sizeof(size));
-	std::memcpy(payload.data() + sizeof(size), &addr, sizeof(addr));
-	std::memcpy(payload.data() + sizeof(size) + sizeof(addr), func.data.data(), func.data.size() * 4);
-	if (const std::string cas = rpcs3::cache::put_to_cas(payload.data(), payload.size(), rpcs3::cache::cas_artifact_type::spu_function_blob); !cas.empty())
+	if (m_buffer_adds)
 	{
-		if (const std::string ppu_cache = rpcs3::cache::get_ppu_cache(); !ppu_cache.empty())
-		{
-			const std::string filename = get_spu_cache_filename();
-			rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
-				rpcs3::cache::make_manifest_record(rpcs3::cache::cas_artifact_type::spu_function_blob, cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
-		}
+		m_pending_entries.emplace_back(std::move(entry));
+		return;
 	}
+
+	if (!write_entry_locked(m_file, entry.payload, entry.entry_point))
+	{
+		return;
+	}
+
+	append_manifest_locked(entry.payload, entry.entry_point);
+}
+
+void spu_cache::set_buffer_adds(bool enabled)
+{
+	std::lock_guard lock(m_io_mutex);
+	m_buffer_adds = enabled;
+}
+
+void spu_cache::flush_pending_entries()
+{
+	std::lock_guard lock(m_io_mutex);
+
+	if (m_pending_entries.empty())
+	{
+		return;
+	}
+
+	if (!m_file)
+	{
+		spu_log.error("SPU cache: dropping %u buffered entries because cache file handle is unavailable", ::narrow<u32>(m_pending_entries.size()));
+		m_pending_entries.clear();
+		return;
+	}
+
+	std::sort(m_pending_entries.begin(), m_pending_entries.end(), [](const pending_cache_entry& lhs, const pending_cache_entry& rhs)
+	{
+		if (lhs.entry_point != rhs.entry_point)
+		{
+			return lhs.entry_point < rhs.entry_point;
+		}
+
+		return lhs.payload_hash < rhs.payload_hash;
+	});
+
+	for (const pending_cache_entry& entry : m_pending_entries)
+	{
+		if (!write_entry_locked(m_file, entry.payload, entry.entry_point))
+		{
+			continue;
+		}
+
+		append_manifest_locked(entry.payload, entry.entry_point);
+	}
+
+	m_pending_entries.clear();
 }
 
 void spu_cache::initialize(bool build_existing_cache)
@@ -838,6 +961,9 @@ void spu_cache::initialize(bool build_existing_cache)
 
 	if (spu_precompilation_enabled)
 	{
+		// Buffer writes while workers compile so the final cache is emitted in stable order for deterministic replay.
+		cache.set_buffer_adds(true);
+
 		// What compiles in this case goes straight to disk
 		g_fxo->get<spu_cache>() = std::move(cache);
 	}
@@ -1255,6 +1381,13 @@ void spu_cache::initialize(bool build_existing_cache)
 	if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
 	{
 		spu_log.success("SPU Runtime: Built %u functions.", func_list.size());
+	}
+
+	if (spu_precompilation_enabled)
+	{
+		auto& global_cache = g_fxo->get<spu_cache>();
+		global_cache.flush_pending_entries();
+		global_cache.set_buffer_adds(false);
 	}
 
 	// Initialize global cache instance

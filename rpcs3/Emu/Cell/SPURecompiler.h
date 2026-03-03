@@ -9,20 +9,32 @@
 #include <memory>
 #include <string>
 #include <deque>
+#include <array>
+#include <mutex>
 
 // Helper class
 class spu_cache
 {
+	struct pending_cache_entry
+	{
+		u32 entry_point = 0;
+		std::array<u8, 20> payload_hash{};
+		std::vector<u8> payload;
+	};
+
 	fs::file m_file;
+	mutable std::mutex m_io_mutex;
+	std::vector<pending_cache_entry> m_pending_entries;
+	bool m_buffer_adds = false;
 
 public:
 	spu_cache() = default;
 
 	spu_cache(const std::string& loc);
 
-	spu_cache(spu_cache&&) noexcept = default;
+	spu_cache(spu_cache&& other) noexcept;
 
-	spu_cache& operator=(spu_cache&&) noexcept = default;
+	spu_cache& operator=(spu_cache&& other) noexcept;
 
 	~spu_cache();
 
@@ -34,6 +46,10 @@ public:
 	std::deque<struct spu_program> get();
 
 	void add(const struct spu_program& func);
+
+	void set_buffer_adds(bool enabled);
+
+	void flush_pending_entries();
 
 	static void initialize(bool build_existing_cache = true);
 
