@@ -75,6 +75,7 @@ namespace rsx
 		std::string root_path;
 		std::string pipeline_class_name;
 		std::string compatibility_tuple;
+		std::string compatibility_tuple_legacy;
 		std::string raw_program_format_version;
 		lf_fifo<std::unique_ptr<u8[]>, 100> fragment_program_data;
 
@@ -236,6 +237,7 @@ namespace rsx
 			: version_prefix(std::move(version_prefix_str))
 			, pipeline_class_name(std::move(pipeline_class))
 			, compatibility_tuple(rpcs3::cache::make_compatibility_tuple("rsx", pipeline_class_name, platform_fields))
+			, compatibility_tuple_legacy(fmt::format("schema=%u|domain=%s|backend=%s|platform=%s", 1u, "rsx", pipeline_class_name, platform_fields.empty() ? rpcs3::cache::get_platform_cache_id() : platform_fields))
 			, raw_program_format_version("rsx-raw-program-v2")
 			, m_storage(storage)
 		{
@@ -387,7 +389,8 @@ namespace rsx
 			rpcs3::cache::manifest_record idx_rec;
 			if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
 				|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_vp_blob, compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm)
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, "rsx-raw-program-v1")))
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple, "rsx-raw-program-v1")
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "vp", compatibility_tuple_legacy, "rsx-raw-program-v1")))
 			{
 				return vp;
 			}
@@ -421,7 +424,8 @@ namespace rsx
 				rpcs3::cache::manifest_record idx_rec;
 				if (!rpcs3::cache::parse_manifest_record(rec, idx_rec)
 					|| (!rpcs3::cache::is_manifest_record_compatible(idx_rec, rpcs3::cache::cas_artifact_type::rsx_raw_fp_blob, compatibility_tuple, raw_program_format_version, rpcs3::cache::cas_cache_tier::warm)
-					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, "rsx-raw-program-v1"))
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple, "rsx-raw-program-v1")
+					&& !rpcs3::cache::is_manifest_record_compatible(idx_rec, "fp", compatibility_tuple_legacy, "rsx-raw-program-v1"))
 					|| !rpcs3::cache::get_from_cas(idx_rec.hash_key, cas_bytes))
 				{
 					return fp;
