@@ -114,6 +114,107 @@ u16 PadHandlerBase::NormalizeStickInput(u16 raw_value, s32 threshold, s32 multip
 	return static_cast<u16>(ScaledInput(static_cast<f32>(scaled_value), 0.0f, static_cast<f32>(thumb_max), static_cast<f32>(threshold)));
 }
 
+u16 PadHandlerBase::ApplyPressureCalibration(u16 value, const pressure_calibration& calibration) const
+{
+	if (value == 0)
+	{
+		return 0;
+	}
+
+	u16 normalized = value;
+
+	if (calibration.deadzone > 0)
+	{
+		normalized = NormalizeDirectedInput(normalized, calibration.deadzone, 255);
+	}
+
+	if (normalized == 0)
+	{
+		return 0;
+	}
+
+	if (calibration.saturation_enabled)
+	{
+		const u16 saturation = std::max<u16>(1, calibration.saturation);
+		normalized = static_cast<u16>(std::round(ScaledInput(static_cast<f32>(std::min<u16>(normalized, saturation)), 0.0f, static_cast<f32>(saturation), 0.0f, 255.0f)));
+	}
+
+	if (calibration.gamma != 1.0f)
+	{
+		const f32 n = std::clamp(static_cast<f32>(normalized) / 255.0f, 0.0f, 1.0f);
+		normalized = static_cast<u16>(std::round(std::pow(n, calibration.gamma) * 255.0f));
+	}
+
+	return Clamp0To255(normalized);
+}
+
+PadHandlerBase::pressure_button_group PadHandlerBase::get_pressure_button_group(const Button& button) const
+{
+	switch (button.m_outKeyCode)
+	{
+	case CELL_PAD_CTRL_SQUARE:
+	case CELL_PAD_CTRL_CROSS:
+	case CELL_PAD_CTRL_CIRCLE:
+	case CELL_PAD_CTRL_TRIANGLE:
+	case CELL_PAD_CTRL_PRESS_SQUARE:
+	case CELL_PAD_CTRL_PRESS_CROSS:
+	case CELL_PAD_CTRL_PRESS_CIRCLE:
+	case CELL_PAD_CTRL_PRESS_TRIANGLE:
+		return pressure_button_group::face;
+	case CELL_PAD_CTRL_UP:
+	case CELL_PAD_CTRL_DOWN:
+	case CELL_PAD_CTRL_LEFT:
+	case CELL_PAD_CTRL_RIGHT:
+	case CELL_PAD_CTRL_PRESS_UP:
+	case CELL_PAD_CTRL_PRESS_DOWN:
+	case CELL_PAD_CTRL_PRESS_LEFT:
+	case CELL_PAD_CTRL_PRESS_RIGHT:
+		return pressure_button_group::dpad;
+	case CELL_PAD_CTRL_L1:
+	case CELL_PAD_CTRL_L2:
+	case CELL_PAD_CTRL_R1:
+	case CELL_PAD_CTRL_R2:
+	case CELL_PAD_CTRL_PRESS_L1:
+	case CELL_PAD_CTRL_PRESS_L2:
+	case CELL_PAD_CTRL_PRESS_R1:
+	case CELL_PAD_CTRL_PRESS_R2:
+		return pressure_button_group::shoulder;
+	default:
+		return pressure_button_group::none;
+	}
+}
+
+PadHandlerBase::pressure_calibration PadHandlerBase::get_pressure_calibration(const cfg_pad* cfg, pressure_button_group group) const
+{
+	if (!cfg)
+	{
+		return {};
+	}
+
+	switch (group)
+	{
+	case pressure_button_group::face:
+		return { static_cast<u16>(cfg->pressure_face_deadzone.get()), cfg->pressure_face_gamma.get(), cfg->pressure_face_saturation_enabled.get(), static_cast<u16>(cfg->pressure_face_saturation.get()) };
+	case pressure_button_group::dpad:
+		return { static_cast<u16>(cfg->pressure_dpad_deadzone.get()), cfg->pressure_dpad_gamma.get(), cfg->pressure_dpad_saturation_enabled.get(), static_cast<u16>(cfg->pressure_dpad_saturation.get()) };
+	case pressure_button_group::shoulder:
+		return { static_cast<u16>(cfg->pressure_shoulder_deadzone.get()), cfg->pressure_shoulder_gamma.get(), cfg->pressure_shoulder_saturation_enabled.get(), static_cast<u16>(cfg->pressure_shoulder_saturation.get()) };
+	case pressure_button_group::none:
+	default:
+		return {};
+	}
+}
+
+u16 PadHandlerBase::ApplyPressureCalibration(u16 value, const cfg_pad* cfg, pressure_button_group group) const
+{
+	if (group == pressure_button_group::none)
+	{
+		return value;
+	}
+
+	return ApplyPressureCalibration(value, get_pressure_calibration(cfg, group));
+}
+
 // This function normalizes stick deadzone based on the DS3's deadzone, which is ~13% (default of anti deadzone)
 // X and Y is expected to be in (-255) to 255 range, deadzone should be in terms of thumb stick range
 // return is new x and y values in 0-255 range
@@ -669,15 +770,17 @@ void PadHandlerBase::get_mapping(const pad_ensemble& binding)
 
 			if (press)
 			{
-				// Modify pressure if necessary if the button was pressed
+				const pressure_button_group pressure_group = get_pressure_button_group(button);
+
 				if (adjust_pressure)
 				{
 					val = pad->m_pressure_intensity;
 				}
-				else if (pressure_intensity_deadzone > 0)
+				else
 				{
-					// Ignore triggers, since they have their own deadzones
-					if (!get_is_left_trigger(device, code) && !get_is_right_trigger(device, code))
+					val = ApplyPressureCalibration(val, cfg, pressure_group);
+
+					if (pressure_group == pressure_button_group::none && pressure_intensity_deadzone > 0)
 					{
 						val = NormalizeDirectedInput(val, pressure_intensity_deadzone, 255);
 					}
