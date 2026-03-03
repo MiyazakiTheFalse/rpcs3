@@ -5339,8 +5339,8 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						compiled_obj.read(bytes.data(), bytes.size());
 						if (const std::string cas = rpcs3::cache::put_to_cas(bytes.data(), bytes.size(), "obj"); !cas.empty())
 						{
-							fs::file mf(cache_path + "manifest.index", fs::append + fs::create + fs::write);
-							mf.write(rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
+							rpcs3::cache::append_manifest_record_atomic(cache_path + "manifest.index",
+								rpcs3::cache::make_manifest_record("ppu_obj", cas, obj_name, get_ppu_cache_compatibility_tuple(), s_ppu_manifest_format_version));
 						}
 					}
 

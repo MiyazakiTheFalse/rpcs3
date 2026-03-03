@@ -73,6 +73,108 @@ namespace rpcs3::cache
 		return out;
 	}
 
+	static std::string make_atomic_tmp_path(const std::string& target)
+	{
+		static atomic_t<u64> s_tmp_counter{0};
+		return fmt::format("%s.tmp.%llu", target, s_tmp_counter++);
+	}
+
+	bool write_file_atomic(const std::string& path, const void* data, std::size_t size)
+	{
+		if (!data || !size)
+		{
+			return false;
+		}
+
+		const std::string tmp_path = make_atomic_tmp_path(path);
+		fs::remove_file(tmp_path);
+		fs::file out(tmp_path, fs::write + fs::create + fs::trunc);
+		if (!out)
+		{
+			sys_log.error("Failed to open temp cache file %s (%s)", tmp_path, fs::g_tls_error);
+			return false;
+		}
+
+		if (out.write(data, size) != size)
+		{
+			sys_log.error("Failed to write temp cache file %s (%s)", tmp_path, fs::g_tls_error);
+			out.close();
+			fs::remove_file(tmp_path);
+			return false;
+		}
+
+		out.sync();
+		out.close();
+
+		if (fs::stat_t st{}; !fs::get_stat(tmp_path, st) || st.size != size)
+		{
+			sys_log.error("Temp cache file %s size verification failed (%s)", tmp_path, fs::g_tls_error);
+			fs::remove_file(tmp_path);
+			return false;
+		}
+
+		if (!fs::rename(tmp_path, path, true))
+		{
+			sys_log.error("Failed to atomically replace cache file %s -> %s (%s)", tmp_path, path, fs::g_tls_error);
+			fs::remove_file(tmp_path);
+			return false;
+		}
+
+		return true;
+	}
+
+	bool write_text_file_atomic(const std::string& path, std::string_view text)
+	{
+		if (text.empty())
+		{
+			return false;
+		}
+
+		return write_file_atomic(path, text.data(), text.size());
+	}
+
+	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal)
+	{
+		if (record.empty())
+		{
+			return false;
+		}
+
+		const std::string journal_path = path + ".pending";
+		std::string pending;
+		if (use_journal)
+		{
+			if (!fs::read_file(journal_path, pending) && fs::is_file(journal_path))
+			{
+				return false;
+			}
+
+			if (!write_text_file_atomic(journal_path, std::string(record)))
+			{
+				return false;
+			}
+		}
+
+		std::string snapshot;
+		if (!fs::read_file(path, snapshot) && fs::is_file(path))
+		{
+			return false;
+		}
+		snapshot += pending;
+		snapshot += record;
+		if (!write_text_file_atomic(path, snapshot))
+		{
+			return false;
+		}
+
+		if (use_journal)
+		{
+			fs::remove_file(journal_path);
+		}
+
+		return true;
+	}
+
 	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension)
 	{
 		if (!data || !size)
@@ -95,9 +197,22 @@ namespace rpcs3::cache
 			return hash_key;
 		}
 
-		if (!fs::write_file(object_path, fs::rewrite, data, size))
+
+		if (!write_file_atomic(object_path, data, size))
 		{
+			if (fs::stat_t existing{}; fs::get_stat(object_path, existing) && existing.size == size)
+			{
+				return hash_key;
+			}
+
 			sys_log.error("Failed to write CAS object %s (%s)", object_path, fs::g_tls_error);
+			return {};
+		}
+
+		std::vector<uchar> verify;
+		if (!get_from_cas(hash_key, verify) || verify.size() != size || canonical_sha1_hex(verify.data(), verify.size()) != hash_key)
+		{
+			sys_log.error("CAS object verification failed for %s", object_path);
 			return {};
 		}
 
