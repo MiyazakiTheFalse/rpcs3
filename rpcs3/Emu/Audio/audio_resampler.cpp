@@ -4,20 +4,31 @@
 
 audio_resampler::audio_resampler()
 {
-	// Improved quality settings for better audio output
-	resampler.setSetting(SETTING_SEQUENCE_MS, 40);   // Increased sequence length for better quality (was 20)
-	resampler.setSetting(SETTING_SEEKWINDOW_MS, 15); // Better seeking window for smoother transitions
-	resampler.setSetting(SETTING_OVERLAP_MS, 8);     // Improved overlap for better quality
-	resampler.setSetting(SETTING_USE_QUICKSEEK, 0);  // Disable quick seek for higher quality (was 1)
-	resampler.setSetting(SETTING_USE_AA_FILTER, 1);  // Enable anti-aliasing filter for cleaner sound
+	set_preset(audio_profile::manual);
 }
 
 audio_resampler::~audio_resampler()
 {
 }
 
+void audio_resampler::apply_params(const runtime_resampler_params& params)
+{
+	resampler.setSetting(SETTING_SEQUENCE_MS, params.sequence_ms);
+	resampler.setSetting(SETTING_SEEKWINDOW_MS, params.seekwindow_ms);
+	resampler.setSetting(SETTING_OVERLAP_MS, params.overlap_ms);
+	resampler.setSetting(SETTING_USE_QUICKSEEK, params.use_quickseek);
+	resampler.setSetting(SETTING_USE_AA_FILTER, params.use_aa_filter);
+}
+
+void audio_resampler::set_preset(audio_profile profile)
+{
+	m_profile = profile;
+	apply_params(audio::get_runtime_resampler_params(m_profile));
+}
+
 void audio_resampler::set_params(AudioChannelCnt ch_cnt, AudioFreq freq)
 {
+	apply_params(audio::get_runtime_resampler_params(m_profile));
 	flush();
 	resampler.setChannels(static_cast<u32>(ch_cnt));
 	resampler.setSampleRate(static_cast<u32>(freq));

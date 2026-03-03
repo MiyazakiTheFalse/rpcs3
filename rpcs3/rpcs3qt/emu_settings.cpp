@@ -1090,6 +1090,14 @@ QString emu_settings::GetLocalizedSetting(const QString& original, emu_settings_
 		case output_scaling_mode::fsr: return tr("FidelityFX Super Resolution 1", "Output Scaling Mode");
 		}
 		break;
+	case emu_settings_type::AudioProfile:
+		switch (static_cast<audio_profile>(index))
+		{
+		case audio_profile::manual: return tr("Manual", "Audio profile");
+		case audio_profile::accurate: return tr("Accurate", "Audio profile");
+		case audio_profile::low_latency: return tr("Low Latency", "Audio profile");
+		}
+		break;
 	case emu_settings_type::AudioRenderer:
 		switch (static_cast<audio_renderer>(index))
 		{

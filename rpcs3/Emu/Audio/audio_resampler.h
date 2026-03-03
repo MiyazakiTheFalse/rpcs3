@@ -2,6 +2,7 @@
 
 #include "util/types.hpp"
 #include "Emu/Audio/AudioBackend.h"
+#include "Emu/Audio/audio_runtime_config.h"
 
 #ifndef _MSC_VER
 #pragma GCC diagnostic push
@@ -23,6 +24,7 @@ public:
 	~audio_resampler();
 
 	void set_params(AudioChannelCnt ch_cnt, AudioFreq freq);
+	void set_preset(audio_profile profile);
 	f64 set_tempo(f64 new_tempo);
 
 	void put_samples(const f32* buf, u32 sample_cnt);
@@ -34,5 +36,7 @@ public:
 	void flush();
 
 private:
+	void apply_params(const runtime_resampler_params& params);
+	audio_profile m_profile = audio_profile::manual;
 	soundtouch::SoundTouch resampler{};
 };

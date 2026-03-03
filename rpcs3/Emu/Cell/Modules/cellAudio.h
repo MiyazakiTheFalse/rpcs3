@@ -210,6 +210,8 @@ struct cell_audio_config
 		s64 desired_buffer_duration = 0;
 		bool enable_time_stretching = false;
 		s64 time_stretching_threshold = 0;
+		bool disable_sampling_skip = false;
+		audio_profile profile = audio_profile::manual;
 		bool convert_to_s16 = false;
 		bool dump_to_file = false;
 		audio_channel_layout channel_layout = audio_channel_layout::automatic;
@@ -267,6 +269,8 @@ struct cell_audio_config
 
 	// We need to be able to set a dynamic frequency ratio to be able to do time stretching
 	bool time_stretching_enabled = false;
+	bool disable_sampling_skip = false;
+	audio_profile active_profile = audio_profile::manual;
 
 	f32 time_stretching_threshold = 0.0f; // we only apply time stretching below this buffer fill rate (adjusted for average period)
 	static constexpr f32 time_stretching_step = 0.1f; // will only reduce/increase the frequency ratio in steps of at least this value

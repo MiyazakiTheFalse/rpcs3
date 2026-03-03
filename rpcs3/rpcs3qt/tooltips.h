@@ -72,10 +72,10 @@ public:
 		const QString audio_format              = tr("Determines the sound format of the emulation.\nConfigure this setting if you want to switch between stereo and surround sound.\nChanging these values requires a restart of the game.\nThe manual setting will use your selected formats while the automatic setting will let the game choose from all available formats.");
 		const QString audio_channel_layout      = tr("Determines the sound format of RPCS3.\nUse 'Auto' to let RPCS3 decide the best format based on the audio device and the emulated audio format.");
 		const QString master_volume             = tr("Controls the overall volume of the emulation.\nValues above 100% might reduce the audio quality.");
-		const QString enable_buffering          = tr("Enables audio buffering, which reduces crackle/stutter but increases audio latency.");
+		const QString enable_buffering          = tr("Enables audio buffering, which reduces crackle/stutter but increases audio latency.\nIf Audio Profile is set to Accurate or Low Latency, profile preset values override buffering and related advanced options.");
 		const QString audio_buffer_duration     = tr("Target buffer duration in milliseconds.\nHigher values make the buffering algorithm's job easier, but may introduce noticeable audio latency.");
-		const QString enable_time_stretching    = tr("Enables time stretching - requires buffering to be enabled.\nReduces crackle/stutter further, but may cause a very noticeable reduction in audio quality on slower CPUs.");
-		const QString time_stretching_threshold = tr("Buffer fill level (in percentage) below which time stretching will start.");
+		const QString enable_time_stretching    = tr("Enables time stretching - requires buffering to be enabled.\nReduces crackle/stutter further, but may cause a very noticeable reduction in audio quality on slower CPUs.\nIf Audio Profile is set to Accurate or Low Latency, profile preset values override this setting.");
+		const QString time_stretching_threshold = tr("Buffer fill level (in percentage) below which time stretching will start.\nIf Audio Profile is set to Accurate or Low Latency, profile preset values override this threshold.");
 		const QString microphone                = tr("Standard should be used for most games.\nSingStar emulates a SingStar device and should be used with SingStar games.\nReal SingStar should only be used with a REAL SingStar device with SingStar games.\nRocksmith should be used with a Rocksmith dongle.");
 
 		// cpu

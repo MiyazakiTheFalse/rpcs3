@@ -106,6 +106,13 @@ enum class audio_channel_layout
 	surround_7_1,
 };
 
+enum class audio_profile
+{
+	manual,
+	accurate,
+	low_latency,
+};
+
 enum class music_handler
 {
 	null,

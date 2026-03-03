@@ -2,6 +2,7 @@
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 #include "Emu/Audio/audio_utils.h"
+#include "Emu/Audio/audio_runtime_config.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_process.h"
@@ -102,8 +103,19 @@ void cell_audio_config::reset(bool backend_changed)
 
 	audio_buffer_length = AUDIO_BUFFER_SAMPLES * audio_channels;
 
-	desired_buffer_duration = std::max(static_cast<s64>(audio_min_buffer_duration * 1000), raw.desired_buffer_duration) * 1000llu;
-	buffering_enabled = raw.buffering_enabled && raw.renderer != audio_renderer::null;
+	const audio::resolved_runtime_profile runtime_profile = audio::resolve_runtime_profile({
+		.profile = raw.profile,
+		.buffering_enabled = raw.buffering_enabled,
+		.desired_buffer_duration = raw.desired_buffer_duration,
+		.enable_time_stretching = raw.enable_time_stretching,
+		.time_stretching_threshold = raw.time_stretching_threshold,
+		.disable_sampling_skip = raw.disable_sampling_skip,
+	});
+
+	active_profile = raw.profile;
+	disable_sampling_skip = runtime_profile.disable_sampling_skip;
+	desired_buffer_duration = std::max(static_cast<s64>(audio_min_buffer_duration * 1000), runtime_profile.desired_buffer_duration) * 1000llu;
+	buffering_enabled = runtime_profile.buffering_enabled && raw.renderer != audio_renderer::null;
 
 	minimum_block_period = audio_block_period / 2;
 	maximum_block_period = (6 * audio_block_period) / 5;
@@ -114,17 +126,17 @@ void cell_audio_config::reset(bool backend_changed)
 	fully_untouched_timeout = static_cast<u64>(audio_block_period) * 2;
 	partially_untouched_timeout = static_cast<u64>(audio_block_period) * 4;
 
-	const bool raw_time_stretching_enabled = buffering_enabled && raw.enable_time_stretching && (raw.time_stretching_threshold > 0);
+	const bool raw_time_stretching_enabled = buffering_enabled && runtime_profile.enable_time_stretching && (runtime_profile.time_stretching_threshold > 0);
 
 	time_stretching_enabled = raw_time_stretching_enabled;
-	time_stretching_threshold = raw.time_stretching_threshold / 100.0f;
+	time_stretching_threshold = runtime_profile.time_stretching_threshold / 100.0f;
 
 	// Warn if audio backend does not support all requested features
-	if (raw.buffering_enabled && !buffering_enabled)
+	if (runtime_profile.buffering_enabled && !buffering_enabled)
 	{
 		cellAudio.error("Audio backend %s does not support buffering, this option will be ignored.", backend->GetName());
 
-		if (raw.enable_time_stretching)
+		if (runtime_profile.enable_time_stretching)
 		{
 			cellAudio.error("Audio backend %s does not support time stretching, this option will be ignored.", backend->GetName());
 		}
@@ -154,6 +166,7 @@ audio_ringbuffer::audio_ringbuffer(cell_audio_config& _cfg)
 	}
 
 	// Configure resampler
+	resampler.set_preset(cfg.active_profile);
 	resampler.set_params(static_cast<AudioChannelCnt>(cfg.audio_channels), static_cast<AudioFreq>(cfg.audio_sampling_rate));
 	resampler.set_tempo(RESAMPLER_MAX_FREQ_VAL);
 
@@ -617,6 +630,8 @@ namespace audio
 			.desired_buffer_duration = g_cfg.audio.desired_buffer_duration,
 			.enable_time_stretching = static_cast<bool>(g_cfg.audio.enable_time_stretching),
 			.time_stretching_threshold = g_cfg.audio.time_stretching_threshold,
+			.disable_sampling_skip = static_cast<bool>(g_cfg.audio.disable_sampling_skip),
+			.profile = g_cfg.audio.profile,
 			.convert_to_s16 = static_cast<bool>(g_cfg.audio.convert_to_s16),
 			.dump_to_file = static_cast<bool>(g_cfg.audio.dump_to_file),
 			.channel_layout = g_cfg.audio.channel_layout,
@@ -644,6 +659,8 @@ namespace audio
 				raw.buffering_enabled != new_raw.buffering_enabled ||
 				raw.time_stretching_threshold != new_raw.time_stretching_threshold ||
 				raw.enable_time_stretching != new_raw.enable_time_stretching ||
+				raw.disable_sampling_skip != new_raw.disable_sampling_skip ||
+				raw.profile != new_raw.profile ||
 				raw.convert_to_s16 != new_raw.convert_to_s16 ||
 				raw.renderer != new_raw.renderer ||
 				raw.dump_to_file != new_raw.dump_to_file)
@@ -910,7 +927,7 @@ void cell_audio_thread::operator()()
 				// As such, if the game doesn't touch buffers for too long we advance time hoping the game recovers
 				if (
 					(untouched == active_ports && time_since_last_period > cfg.fully_untouched_timeout) ||
-					(time_since_last_period > cfg.partially_untouched_timeout) || g_cfg.audio.disable_sampling_skip
+					(time_since_last_period > cfg.partially_untouched_timeout) || cfg.disable_sampling_skip
 				   )
 				{
 					// There's no audio in the buffers, simply advance time and hope the game recovers

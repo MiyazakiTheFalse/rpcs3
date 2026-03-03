@@ -145,6 +145,22 @@ void fmt_class_string<audio_channel_layout>::format(std::string& out, u64 arg)
 }
 
 template <>
+void fmt_class_string<audio_profile>::format(std::string& out, u64 arg)
+{
+	format_enum(out, arg, [](audio_profile value)
+	{
+		switch (value)
+		{
+		case audio_profile::manual: return "Manual";
+		case audio_profile::accurate: return "Accurate";
+		case audio_profile::low_latency: return "Low Latency";
+		}
+
+		return unknown;
+	});
+}
+
+template <>
 void fmt_class_string<detail_level>::format(std::string& out, u64 arg)
 {
 	format_enum(out, arg, [](detail_level value)
