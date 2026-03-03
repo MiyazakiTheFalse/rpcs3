@@ -26,6 +26,9 @@ namespace rpcs3::cache
 	std::string make_compatibility_tuple(std::string_view domain, std::string_view backend_id, std::string_view platform_fields = {});
 
 	std::string put_to_cas(const void* data, std::size_t size, std::string_view extension = {});
+	bool write_file_atomic(const std::string& path, const void* data, std::size_t size);
+	bool write_text_file_atomic(const std::string& path, std::string_view text);
+	bool append_manifest_record_atomic(const std::string& path, std::string_view record, bool use_journal = true);
 	bool get_from_cas(const std::string& hash_key, std::vector<uchar>& out);
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {});
 	bool parse_manifest_record(std::string_view line, manifest_record& out);

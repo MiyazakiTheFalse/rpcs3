@@ -334,13 +334,13 @@ namespace rsx
 			if (!fp_cas.empty())
 			{
 				const std::string fp_index = root_path + "/raw_index/" + fmt::format("%llX.fpidx", data.fragment_program_hash);
-				fs::write_file(fp_index, fs::rewrite, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(fp_index, rpcs3::cache::make_manifest_record("fp", fp_cas, std::to_string(fp.ucode_length), compatibility_tuple, raw_program_format_version));
 			}
 
 			if (!vp_cas.empty())
 			{
 				const std::string vp_index = root_path + "/raw_index/" + fmt::format("%llX.vpidx", data.vertex_program_hash);
-				fs::write_file(vp_index, fs::rewrite, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
+				rpcs3::cache::write_text_file_atomic(vp_index, rpcs3::cache::make_manifest_record("vp", vp_cas, std::to_string(vp.data.size() * sizeof(u32)), compatibility_tuple, raw_program_format_version));
 			}
 
 			const u32 state_params[] =
@@ -364,7 +364,7 @@ namespace rsx
 
 			const std::string pipeline_file_name = fmt::format("%llX+%llX+%llX+%llX.bin", data.vertex_program_hash, data.fragment_program_hash, data.pipeline_storage_hash, state_hash);
 			const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
-			fs::write_file(pipeline_path, fs::rewrite, &data, sizeof(data));
+			rpcs3::cache::write_file_atomic(pipeline_path, &data, sizeof(data));
 		}
 
 		RSXVertexProgram load_vp_raw(u64 program_hash) const

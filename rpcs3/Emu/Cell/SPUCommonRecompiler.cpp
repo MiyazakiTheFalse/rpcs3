@@ -721,8 +721,8 @@ void spu_cache::add(const spu_program& func)
 		if (const std::string ppu_cache = rpcs3::cache::get_ppu_cache(); !ppu_cache.empty())
 		{
 			const std::string filename = get_spu_cache_filename();
-			fs::file mf(ppu_cache + filename + ".manifest", fs::append + fs::create + fs::write);
-			mf.write(rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
+			rpcs3::cache::append_manifest_record_atomic(ppu_cache + filename + ".manifest",
+				rpcs3::cache::make_manifest_record("spu", cas, std::to_string(func.entry_point), get_spu_cache_compatibility_tuple(), s_spu_manifest_format_version));
 		}
 	}
 }
