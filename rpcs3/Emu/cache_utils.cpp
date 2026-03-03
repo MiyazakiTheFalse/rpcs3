@@ -3,11 +3,14 @@
 #include "system_utils.hpp"
 #include "system_config.h"
 #include "IdManager.h"
+#include "Emu/System.h"
+#include "rpcs3_version.h"
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Crypto/sha1.h"
 
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -834,6 +837,128 @@ namespace rpcs3::cache
 		}
 
 		return true;
+	}
+
+
+	static std::string escape_json_string(std::string_view in)
+	{
+		std::string out;
+		out.reserve(in.size() + 8);
+
+		for (const char ch : in)
+		{
+			switch (ch)
+			{
+			case '\\': out += "\\\\"; break;
+			case '"': out += "\\\""; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default: out += ch; break;
+			}
+		}
+
+		return out;
+	}
+
+	void record_catalog_reference(std::string_view family, std::string_view artifact_type, std::string_view hash_key, std::string_view compatibility_tuple, std::string_view format_version, std::string_view settings_fingerprint, std::string_view gpu_fingerprint)
+	{
+		if (hash_key.empty() || family.empty())
+		{
+			return;
+		}
+
+		auto sanitize_token = [](std::string value)
+		{
+			for (char& c : value)
+			{
+				if (!std::isalnum(static_cast<uchar>(c)) && c != '-' && c != '_' && c != '.')
+				{
+					c = '_';
+				}
+			}
+			return value;
+		};
+
+		const std::string title_id = sanitize_token(Emu.GetTitleID());
+		if (title_id.empty())
+		{
+			return;
+		}
+
+		std::string app_version = sanitize_token(Emu.GetAppVersion());
+		if (app_version.empty())
+		{
+			app_version = "unknown";
+		}
+
+		const auto [build_revision, build_hash] = rpcs3::get_commit_and_hash();
+		const std::string build_id = sanitize_token(fmt::format("%s-%s", build_revision, build_hash));
+		const std::string settings_hash = canonical_sha1_hex(settings_fingerprint.data(), settings_fingerprint.size());
+		const std::string gpu_hash = canonical_sha1_hex(gpu_fingerprint.data(), gpu_fingerprint.size());
+
+		const std::string run_id = fmt::format("%s-app%s-build%s-emu%u-cfg%s%s",
+			title_id,
+			app_version,
+			build_id,
+			emu_cache_schema_version,
+			settings_hash.substr(0, 12),
+			gpu_fingerprint.empty() ? "" : ("-gpu" + gpu_hash.substr(0, 12)));
+
+		const std::string catalog_root = rpcs3::utils::get_cache_dir() + "catalog/" + title_id + "/runs/";
+		if (!fs::is_dir(catalog_root) && !fs::create_path(catalog_root))
+		{
+			sys_log.error("Failed to initialize cache catalog directory %s (%s)", catalog_root, fs::g_tls_error);
+			return;
+		}
+
+		const std::string path = catalog_root + run_id + ".json";
+		const std::string escaped_hash = escape_json_string(hash_key);
+		const std::string escaped_family = escape_json_string(family);
+		const std::string escaped_artifact = escape_json_string(artifact_type);
+		const std::string escaped_compat = escape_json_string(compatibility_tuple);
+		const std::string escaped_format = escape_json_string(format_version);
+		const std::string escaped_cfg = escape_json_string(settings_fingerprint);
+		const std::string escaped_gpu = escape_json_string(gpu_fingerprint);
+		const std::string escaped_build = escape_json_string(build_id);
+
+		std::string existing;
+		const bool has_existing = fs::read_file(path, existing);
+
+		const std::string entry_snippet = fmt::format("\"hash\": \"%s\"", escaped_hash);
+		if (has_existing && existing.find(entry_snippet) != std::string::npos)
+		{
+			return;
+		}
+
+		const std::string new_entry = fmt::format(
+			"\n    {\n      \"family\": \"%s\",\n      \"artifact\": \"%s\",\n      \"hash\": \"%s\",\n      \"compatibility\": \"%s\",\n      \"format\": \"%s\"\n    }",
+			escaped_family, escaped_artifact, escaped_hash, escaped_compat, escaped_format);
+
+		if (!has_existing || existing.empty())
+		{
+			const std::string text = fmt::format(
+				"{\n  \"title_id\": \"%s\",\n  \"app_version\": \"%s\",\n  \"build_id\": \"%s\",\n  \"emu_cache_schema\": %u,\n  \"settings_fingerprint\": \"%s\",\n  \"gpu_fingerprint\": \"%s\",\n  \"entries\": [%s\n  ]\n}\n",
+				escape_json_string(title_id), escape_json_string(app_version), escaped_build, emu_cache_schema_version, escaped_cfg, escaped_gpu, new_entry);
+			write_text_file_atomic(path, text);
+			return;
+		}
+
+		const usz entries_end = existing.rfind("]");
+		if (entries_end == umax)
+		{
+			return;
+		}
+
+		const bool has_entries = existing.find("\"hash\":") != umax;
+		std::string updated = existing.substr(0, entries_end);
+		if (has_entries)
+		{
+			updated += ",";
+		}
+		updated += new_entry;
+		updated += existing.substr(entries_end);
+		write_text_file_atomic(path, updated);
 	}
 
 	void limit_cache_size()

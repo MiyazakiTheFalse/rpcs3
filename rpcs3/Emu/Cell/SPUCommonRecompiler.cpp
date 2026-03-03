@@ -710,6 +710,7 @@ namespace
 		new_record.compatibility_tuple = compatibility_tuple;
 		new_record.format_version = std::string(s_spu_manifest_format_version);
 		new_record.tier = std::to_string(static_cast<u8>(rpcs3::cache::get_default_tier_for_artifact(rpcs3::cache::cas_artifact_type::spu_function_blob)));
+		rpcs3::cache::record_catalog_reference("spu", new_record.artifact_type, new_record.hash_key, new_record.compatibility_tuple, new_record.format_version, new_record.compatibility_tuple);
 
 		std::vector<rpcs3::cache::manifest_record> records;
 		records.reserve(512);
