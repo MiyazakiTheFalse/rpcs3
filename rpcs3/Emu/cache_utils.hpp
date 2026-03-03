@@ -64,6 +64,41 @@ namespace rpcs3::cache
 		std::string label;
 	};
 
+	enum class run_mismatch_reason : u8
+	{
+		title_id,
+		emu_schema,
+		rsx_schema,
+		backend,
+		gpu,
+		settings,
+	};
+
+	struct run_mismatch
+	{
+		run_mismatch_reason reason{};
+		bool hard_constraint = false;
+		std::string detail;
+	};
+
+	struct run_match_options
+	{
+		std::string_view required_backend;
+		u32 weight_gpu = 500;
+		u32 weight_settings = 220;
+		u32 weight_pinned = 30;
+		u32 weight_recency = 20;
+	};
+
+	struct run_match_result
+	{
+		std::string run_id;
+		s64 score = 0;
+		bool full_reuse = false;
+		bool partial_rebuild = false;
+		std::vector<run_mismatch> mismatches;
+	};
+
 	std::string get_ppu_cache();
 	std::string get_shared_cas_root();
 	std::string get_platform_cache_id();
@@ -83,6 +118,7 @@ namespace rpcs3::cache
 	std::string make_manifest_record(cas_artifact_type artifact, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_cache_tier tier = cas_cache_tier::auto_select);
 	std::string make_manifest_record(std::string_view artifact_type, const std::string& hash_key, std::string_view metadata = {}, std::string_view compatibility_tuple = {}, std::string_view format_version = {}, cas_codec codec = cas_codec::auto_select, cas_cache_tier tier = cas_cache_tier::auto_select);
 	std::vector<run_info> list_runs(std::string_view title_id);
+	run_match_result find_best_run_match(std::string_view title_id, std::string_view current_settings_fingerprint, std::string_view current_gpu_fingerprint, const run_match_options& options = {});
 	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned);
 	bool set_current_run_pinned(bool pinned);
 	bool parse_manifest_record(std::string_view line, manifest_record& out);

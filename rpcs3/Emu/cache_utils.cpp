@@ -17,6 +17,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <regex>
 #include <optional>
 #include <unordered_map>
@@ -1066,12 +1067,16 @@ namespace rpcs3::cache
 		struct run_json_metadata
 		{
 			std::string title_id;
+			u32 emu_cache_schema = 0;
+			std::string settings_fingerprint;
+			std::string gpu_fingerprint;
 			bool pinned = false;
 			u64 created_at = 0;
 			std::optional<u64> last_accessed_at;
 			std::string run_reason;
 			std::string label;
 			std::vector<std::string> hashes;
+			std::vector<std::string> compatibilities;
 		};
 
 		std::string extract_json_string(std::string_view text, std::string_view key)
@@ -1098,6 +1103,48 @@ namespace rpcs3::cache
 			}
 
 			return false;
+		}
+
+		static std::optional<u32> extract_json_u32(std::string_view text, std::string_view key)
+		{
+			const std::regex number_re(fmt::format("\"%s\"\\s*:\\s*([0-9]+)", key));
+			const std::string input(text);
+			std::smatch match{};
+			if (std::regex_search(input, match, number_re) && match.size() > 1)
+			{
+				if (const auto value = parse_u64_str(match[1].str()))
+				{
+					return static_cast<u32>(*value);
+				}
+			}
+
+			return std::nullopt;
+		}
+
+		static std::string extract_compat_field(std::string_view tuple, std::string_view key)
+		{
+			for (usz begin = 0, end = 0; begin < tuple.size(); begin = end + 1)
+			{
+				end = tuple.find('|', begin);
+				if (end == umax)
+				{
+					end = tuple.size();
+				}
+
+				const std::string_view token = tuple.substr(begin, end - begin);
+				const usz sep = token.find('=');
+				if (sep == umax)
+				{
+					continue;
+				}
+
+				if (token.substr(0, sep) == key)
+				{
+					return std::string(token.substr(sep + 1));
+				}
+			}
+
+			return {};
 		}
 
 		static std::optional<u64> parse_iso8601_timestamp(std::string_view value)
@@ -1197,6 +1244,9 @@ namespace rpcs3::cache
 		{
 			run_json_metadata metadata{};
 			metadata.title_id = extract_json_string(content, "title_id");
+			metadata.emu_cache_schema = extract_json_u32(content, "emu_cache_schema").value_or(0);
+			metadata.settings_fingerprint = extract_json_string(content, "settings_fingerprint");
+			metadata.gpu_fingerprint = extract_json_string(content, "gpu_fingerprint");
 			metadata.pinned = extract_json_bool(content, "pinned");
 			metadata.created_at = extract_json_timestamp(content, "created_at").value_or(file_mtime);
 			metadata.last_accessed_at = extract_json_timestamp(content, "last_accessed_at");
@@ -1208,6 +1258,12 @@ namespace rpcs3::cache
 			for (std::sregex_iterator it(input.begin(), input.end(), hash_re), end_it; it != end_it; ++it)
 			{
 				metadata.hashes.emplace_back((*it)[1].str());
+			}
+
+			const std::regex compatibility_re("\"compatibility\"\\s*:\\s*\"([^\"]*)\"");
+			for (std::sregex_iterator it(input.begin(), input.end(), compatibility_re), end_it; it != end_it; ++it)
+			{
+				metadata.compatibilities.emplace_back((*it)[1].str());
 			}
 
 			return metadata;
@@ -1373,6 +1429,179 @@ namespace rpcs3::cache
 		});
 
 		return out;
+	}
+
+	run_match_result find_best_run_match(std::string_view title_id, std::string_view current_settings_fingerprint, std::string_view current_gpu_fingerprint, const run_match_options& options)
+	{
+		run_match_result best{};
+		best.score = std::numeric_limits<s64>::min();
+
+		if (title_id.empty())
+		{
+			best.mismatches.push_back({run_mismatch_reason::title_id, true, "Empty title_id"});
+			return best;
+		}
+
+		const std::string runs_root = make_catalog_runs_root(title_id);
+		if (!fs::is_dir(runs_root))
+		{
+			best.mismatches.push_back({run_mismatch_reason::title_id, true, "No catalog runs for title"});
+			return best;
+		}
+
+		u64 newest_timestamp = 0;
+		std::vector<std::pair<run_match_result, u64>> candidates;
+
+		for (const auto& run_file : fs::dir(runs_root))
+		{
+			if (run_file.is_directory || run_file.name == "." || run_file.name == ".." || !run_file.name.ends_with(".json"))
+			{
+				continue;
+			}
+
+			std::string content;
+			const std::string run_path = runs_root + run_file.name;
+			if (!fs::read_file(run_path, content))
+			{
+				continue;
+			}
+
+			const run_json_metadata metadata = parse_run_json_metadata(content, run_file.mtime);
+			run_match_result candidate{};
+			candidate.run_id = run_file.name.substr(0, run_file.name.size() - 5);
+			candidate.score = 0;
+
+			if (!metadata.title_id.empty() && metadata.title_id != title_id)
+			{
+				candidate.mismatches.push_back({run_mismatch_reason::title_id, true, fmt::format("Run title_id %s does not match %s", metadata.title_id, title_id)});
+			}
+
+			if (metadata.emu_cache_schema != emu_cache_schema_version)
+			{
+				candidate.mismatches.push_back({run_mismatch_reason::emu_schema, true, fmt::format("Run emu schema %u, expected %u", metadata.emu_cache_schema, emu_cache_schema_version)});
+			}
+
+			bool has_rsx_schema_match = false;
+			bool has_backend_match = options.required_backend.empty();
+			for (const auto& compat : metadata.compatibilities)
+			{
+				const std::string domain = extract_compat_field(compat, "domain");
+				if (domain != "rsx")
+				{
+					continue;
+				}
+
+				if (const auto schema = parse_u64_str(extract_compat_field(compat, "schema")); schema && *schema == rsx_cache_schema_version)
+				{
+					has_rsx_schema_match = true;
+				}
+
+				if (!options.required_backend.empty() && extract_compat_field(compat, "backend") == options.required_backend)
+				{
+					has_backend_match = true;
+				}
+			}
+
+			if (!has_rsx_schema_match)
+			{
+				candidate.mismatches.push_back({run_mismatch_reason::rsx_schema, true, "No compatible RSX schema entry"});
+			}
+
+			if (!has_backend_match)
+			{
+				candidate.mismatches.push_back({run_mismatch_reason::backend, true, fmt::format("No RSX entry for backend %s", std::string(options.required_backend))});
+			}
+
+			const bool gpu_exact = !current_gpu_fingerprint.empty() && metadata.gpu_fingerprint == current_gpu_fingerprint;
+			if (gpu_exact)
+			{
+				candidate.score += options.weight_gpu;
+			}
+			else
+			{
+				const std::string current_driver = extract_compat_field(current_gpu_fingerprint, "driver");
+				const std::string run_driver = extract_compat_field(metadata.gpu_fingerprint, "driver");
+				if (!current_driver.empty() && !run_driver.empty() && current_driver.substr(0, 3) == run_driver.substr(0, 3))
+				{
+					candidate.score += options.weight_gpu / 2;
+				}
+				else
+				{
+					candidate.mismatches.push_back({run_mismatch_reason::gpu, false, "GPU fingerprint mismatch"});
+				}
+			}
+
+			if (!current_settings_fingerprint.empty() && metadata.settings_fingerprint == current_settings_fingerprint)
+			{
+				candidate.score += options.weight_settings;
+			}
+			else
+			{
+				candidate.mismatches.push_back({run_mismatch_reason::settings, false, "Settings fingerprint mismatch"});
+			}
+
+			if (metadata.pinned)
+			{
+				candidate.score += options.weight_pinned;
+			}
+
+			const u64 timestamp = metadata.last_accessed_at.value_or(metadata.created_at);
+			newest_timestamp = std::max(newest_timestamp, timestamp);
+			candidates.emplace_back(std::move(candidate), timestamp);
+		}
+
+		if (candidates.empty())
+		{
+			best.mismatches.push_back({run_mismatch_reason::title_id, true, "No parseable runs found"});
+			return best;
+		}
+
+		for (auto& candidate_info : candidates)
+		{
+			auto& candidate = candidate_info.first;
+			const u64 timestamp = candidate_info.second;
+
+			const bool hard_mismatch = std::any_of(candidate.mismatches.begin(), candidate.mismatches.end(), [](const run_mismatch& mismatch)
+			{
+				return mismatch.hard_constraint;
+			});
+
+			if (newest_timestamp)
+			{
+				const s64 recency_ratio = static_cast<s64>((timestamp * 100) / newest_timestamp);
+				candidate.score += (recency_ratio * options.weight_recency) / 100;
+			}
+
+			if (!hard_mismatch && candidate.score > best.score)
+			{
+				best = std::move(candidate);
+			}
+		}
+
+		if (best.run_id.empty())
+		{
+			auto fallback = std::max_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b)
+			{
+				return a.first.score < b.first.score;
+			});
+			if (fallback != candidates.end())
+			{
+				best = std::move(fallback->first);
+			}
+		}
+
+		const bool has_hard_mismatch = std::any_of(best.mismatches.begin(), best.mismatches.end(), [](const run_mismatch& mismatch)
+		{
+			return mismatch.hard_constraint;
+		});
+		const bool has_soft_mismatch = std::any_of(best.mismatches.begin(), best.mismatches.end(), [](const run_mismatch& mismatch)
+		{
+			return !mismatch.hard_constraint;
+		});
+
+		best.full_reuse = !has_hard_mismatch && !has_soft_mismatch;
+		best.partial_rebuild = !has_hard_mismatch && has_soft_mismatch;
+		return best;
 	}
 
 	bool set_run_pinned(std::string_view title_id, std::string_view run_id, bool pinned)

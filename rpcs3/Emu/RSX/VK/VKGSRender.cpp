@@ -20,6 +20,7 @@
 #include "Emu/RSX/Host/RSXDMAWriter.h"
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
 #include "Emu/Memory/vm_locking.h"
+#include "Emu/cache_utils.hpp"
 
 #include "../Program/SPIRVCommon.h"
 
@@ -604,6 +605,18 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 		{"gpu", m_device->gpu().get_name()},
 		{"driver", m_device->gpu().get_driver_version()},
 	});
+	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "vulkan", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
+	rpcs3::cache::run_match_options run_match_options{};
+	run_match_options.required_backend = "vulkan";
+	const auto reuse_match = rpcs3::cache::find_best_run_match(Emu.GetTitleID(), settings_fingerprint, cache_platform_fields, run_match_options);
+	if (!reuse_match.run_id.empty())
+	{
+		rsx_log.notice("RSX catalog candidate for Vulkan shader cache: %s (score=%lld, full_reuse=%s, partial_rebuild=%s)", reuse_match.run_id, reuse_match.score, reuse_match.full_reuse ? "true" : "false", reuse_match.partial_rebuild ? "true" : "false");
+		for (const auto& mismatch : reuse_match.mismatches)
+		{
+			rsx_log.notice("RSX catalog mismatch (%s): %s", mismatch.hard_constraint ? "hard" : "soft", mismatch.detail);
+		}
+	}
 	// Shared namespace helper prevents backend drift and avoids invalidation from runtime-only settings.
 	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", rsx::get_pipeline_cache_namespace(), cache_platform_fields);
 
