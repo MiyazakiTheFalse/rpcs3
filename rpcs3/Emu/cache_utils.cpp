@@ -10,13 +10,18 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Crypto/sha1.h"
 
+#include <algorithm>
+#include <charconv>
 #include <cctype>
+#include <ctime>
 #include <cstring>
 #include <memory>
 #include <mutex>
 #include <regex>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <system_error>
 #include <zstd.h>
 
 #if __has_include(<lz4.h>)
@@ -865,6 +870,37 @@ namespace rpcs3::cache
 		return out;
 	}
 
+	static u64 get_unix_epoch_seconds_now()
+	{
+		return static_cast<u64>(std::time(nullptr));
+	}
+
+	static bool upsert_json_key_value(std::string& text, std::string_view key, std::string_view raw_value, bool only_if_missing = false)
+	{
+		const std::regex key_re(fmt::format("(\"%s\"\\s*:\\s*)(?:\"[^\"]*\"|[0-9]+|true|false|null)", key));
+		std::smatch match{};
+		if (std::regex_search(text, match, key_re) && match.size() > 1)
+		{
+			if (only_if_missing)
+			{
+				return false;
+			}
+
+			text.replace(match.position(0), match.length(0), match[1].str() + std::string(raw_value));
+			return true;
+		}
+
+		const usz brace_pos = text.find('{');
+		if (brace_pos == umax)
+		{
+			return false;
+		}
+
+		const std::string insertion = fmt::format("\n  \"%s\": %s,", key, raw_value);
+		text.insert(brace_pos + 1, insertion);
+		return true;
+	}
+
 	void record_catalog_reference(std::string_view family, std::string_view artifact_type, std::string_view hash_key, std::string_view compatibility_tuple, std::string_view format_version, std::string_view settings_fingerprint, std::string_view gpu_fingerprint)
 	{
 		if (hash_key.empty() || family.empty())
@@ -925,13 +961,23 @@ namespace rpcs3::cache
 		const std::string escaped_cfg = escape_json_string(settings_fingerprint);
 		const std::string escaped_gpu = escape_json_string(gpu_fingerprint);
 		const std::string escaped_build = escape_json_string(build_id);
+		const u64 now = get_unix_epoch_seconds_now();
 
 		std::string existing;
 		const bool has_existing = fs::read_file(path, existing);
+		if (has_existing)
+		{
+			upsert_json_key_value(existing, "created_at", std::to_string(now), true);
+			upsert_json_key_value(existing, "pinned", "false", true);
+			upsert_json_key_value(existing, "run_reason", "null", true);
+			upsert_json_key_value(existing, "label", "null", true);
+		}
 
 		const std::string entry_snippet = fmt::format("\"hash\": \"%s\"", escaped_hash);
 		if (has_existing && existing.find(entry_snippet) != std::string::npos)
 		{
+			upsert_json_key_value(existing, "last_accessed_at", std::to_string(now));
+			write_text_file_atomic(path, existing);
 			return;
 		}
 
@@ -942,11 +988,13 @@ namespace rpcs3::cache
 		if (!has_existing || existing.empty())
 		{
 			const std::string text = fmt::format(
-				"{\n  \"title_id\": \"%s\",\n  \"app_version\": \"%s\",\n  \"build_id\": \"%s\",\n  \"emu_cache_schema\": %u,\n  \"pinned\": false,\n  \"settings_fingerprint\": \"%s\",\n  \"gpu_fingerprint\": \"%s\",\n  \"entries\": [%s\n  ]\n}\n",
-				escape_json_string(title_id), escape_json_string(app_version), escaped_build, emu_cache_schema_version, escaped_cfg, escaped_gpu, new_entry);
+				"{\n  \"title_id\": \"%s\",\n  \"app_version\": \"%s\",\n  \"build_id\": \"%s\",\n  \"emu_cache_schema\": %u,\n  \"created_at\": %llu,\n  \"last_accessed_at\": %llu,\n  \"pinned\": false,\n  \"run_reason\": null,\n  \"label\": null,\n  \"settings_fingerprint\": \"%s\",\n  \"gpu_fingerprint\": \"%s\",\n  \"entries\": [%s\n  ]\n}\n",
+				escape_json_string(title_id), escape_json_string(app_version), escaped_build, emu_cache_schema_version, now, now, escaped_cfg, escaped_gpu, new_entry);
 			write_text_file_atomic(path, text);
 			return;
 		}
+
+		upsert_json_key_value(existing, "last_accessed_at", std::to_string(now));
 
 		const usz entries_end = existing.rfind("]");
 		if (entries_end == umax)
@@ -980,6 +1028,30 @@ namespace rpcs3::cache
 	{
 		inline constexpr usz s_default_recent_runs_per_title = 5;
 
+		static std::optional<u64> parse_u64_str(std::string_view raw)
+		{
+			u64 value = 0;
+			const char* begin = raw.data();
+			const char* end = raw.data() + raw.size();
+			const auto [ptr, ec] = std::from_chars(begin, end, value);
+			if (ec != std::errc{} || ptr != end)
+			{
+				return std::nullopt;
+			}
+
+			return value;
+		}
+
+		struct run_json_metadata
+		{
+			std::string title_id;
+			bool pinned = false;
+			u64 created_at = 0;
+			std::optional<u64> last_accessed_at;
+			std::string run_reason;
+			std::string label;
+		};
+
 		std::string extract_json_string(std::string_view text, std::string_view key)
 		{
 			const std::regex re(fmt::format("\"%s\"\\s*:\\s*\"([^\"]*)\"", key));
@@ -1004,6 +1076,111 @@ namespace rpcs3::cache
 			}
 
 			return false;
+		}
+
+		static std::optional<u64> parse_iso8601_timestamp(std::string_view value)
+		{
+			const std::regex re(R"(^\s*(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:([Zz])|([+-])(\d{2}):?(\d{2}))?\s*$)");
+			const std::string input(value);
+			std::smatch match{};
+			if (!std::regex_match(input, match, re))
+			{
+				return std::nullopt;
+			}
+
+			const auto year = parse_u64_str(match[1].str());
+			const auto month = parse_u64_str(match[2].str());
+			const auto day = parse_u64_str(match[3].str());
+			const auto hour = parse_u64_str(match[4].str());
+			const auto minute = parse_u64_str(match[5].str());
+			const auto second = parse_u64_str(match[6].str());
+			if (!year || !month || !day || !hour || !minute || !second)
+			{
+				return std::nullopt;
+			}
+
+			std::tm tm{};
+			tm.tm_year = static_cast<int>(*year) - 1900;
+			tm.tm_mon = static_cast<int>(*month) - 1;
+			tm.tm_mday = static_cast<int>(*day);
+			tm.tm_hour = static_cast<int>(*hour);
+			tm.tm_min = static_cast<int>(*minute);
+			tm.tm_sec = static_cast<int>(*second);
+
+			std::time_t utc_seconds = 0;
+#ifdef _WIN32
+			utc_seconds = _mkgmtime(&tm);
+#else
+			utc_seconds = timegm(&tm);
+#endif
+
+			if (utc_seconds < 0)
+			{
+				return std::nullopt;
+			}
+
+			s64 offset = 0;
+			if (match[8].matched && match[9].matched && match[10].matched)
+			{
+				const auto offset_h = parse_u64_str(match[9].str());
+				const auto offset_m = parse_u64_str(match[10].str());
+				if (!offset_h || !offset_m)
+				{
+					return std::nullopt;
+				}
+
+				offset = static_cast<s64>(*offset_h) * 3600 + static_cast<s64>(*offset_m) * 60;
+				if (match[8].str() == "-")
+				{
+					offset = -offset;
+				}
+			}
+
+			return static_cast<u64>(static_cast<s64>(utc_seconds) - offset);
+		}
+
+		static std::optional<u64> extract_json_timestamp(std::string_view text, std::string_view key)
+		{
+			const std::string input(text);
+			std::smatch match{};
+
+			const std::regex number_re(fmt::format("\"%s\"\\s*:\\s*([0-9]+)", key));
+			if (std::regex_search(input, match, number_re) && match.size() > 1)
+			{
+				if (const auto value = parse_u64_str(match[1].str()))
+				{
+					return *value;
+				}
+			}
+
+			const std::regex string_re(fmt::format("\"%s\"\\s*:\\s*\"([^\"]+)\"", key));
+			if (std::regex_search(input, match, string_re) && match.size() > 1)
+			{
+				const std::string raw = match[1].str();
+				if (!raw.empty() && std::all_of(raw.begin(), raw.end(), [](char ch) { return std::isdigit(static_cast<uchar>(ch)) != 0; }))
+				{
+					if (const auto value = parse_u64_str(raw))
+					{
+						return *value;
+					}
+				}
+
+				return parse_iso8601_timestamp(raw);
+			}
+
+			return std::nullopt;
+		}
+
+		static run_json_metadata parse_run_json_metadata(std::string_view content, u64 file_mtime)
+		{
+			run_json_metadata metadata{};
+			metadata.title_id = extract_json_string(content, "title_id");
+			metadata.pinned = extract_json_bool(content, "pinned");
+			metadata.created_at = extract_json_timestamp(content, "created_at").value_or(file_mtime);
+			metadata.last_accessed_at = extract_json_timestamp(content, "last_accessed_at");
+			metadata.run_reason = extract_json_string(content, "run_reason");
+			metadata.label = extract_json_string(content, "label");
+			return metadata;
 		}
 
 		std::vector<std::string> extract_entry_hashes(std::string_view text)
@@ -1058,13 +1235,15 @@ namespace rpcs3::cache
 					gc_run_info run{};
 					run.path = full_path;
 					run.name = run_file.name;
-					run.timestamp = run_file.mtime;
-					run.title_id = extract_json_string(content, "title_id");
+
+					const run_json_metadata metadata = parse_run_json_metadata(content, run_file.mtime);
+					run.timestamp = metadata.last_accessed_at.value_or(metadata.created_at);
+					run.title_id = metadata.title_id;
 					if (run.title_id.empty())
 					{
 						run.title_id = title_dir.name;
 					}
-					run.pinned = extract_json_bool(content, "pinned");
+					run.pinned = metadata.pinned;
 					run.hashes = extract_entry_hashes(content);
 					runs.emplace_back(std::move(run));
 				}
