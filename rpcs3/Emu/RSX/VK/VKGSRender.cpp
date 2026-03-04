@@ -613,19 +613,68 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 		default: return "unknown";
 		}
 	};
-	const auto chip_family_to_string = []()
+	const auto driver_family_to_string = []()
 	{
-		return fmt::format("%u", static_cast<u32>(vk::get_chip_family()));
+		switch (vk::get_chip_family())
+		{
+		case vk::chip_class::NV_generic:
+		case vk::chip_class::NV_kepler:
+		case vk::chip_class::NV_maxwell:
+		case vk::chip_class::NV_pascal:
+		case vk::chip_class::NV_volta:
+		case vk::chip_class::NV_turing:
+		case vk::chip_class::NV_ampere:
+		case vk::chip_class::NV_lovelace:
+		case vk::chip_class::NV_blackwell:
+			return "nvidia";
+		case vk::chip_class::AMD_gcn_generic:
+		case vk::chip_class::AMD_polaris:
+		case vk::chip_class::AMD_vega:
+			return "amd_gcn";
+		case vk::chip_class::AMD_navi1x:
+		case vk::chip_class::AMD_navi2x:
+		case vk::chip_class::AMD_navi3x:
+			return "amd_navi";
+		case vk::chip_class::INTEL_generic:
+			return "intel";
+		case vk::chip_class::INTEL_alchemist:
+			return "intel_alchemist";
+		case vk::chip_class::APPLE_MVK:
+			return "apple_mvk";
+		case vk::chip_class::APPLE_HK_generic:
+			return "apple_hk";
+		default:
+			return "unknown";
+		}
+	};
+	const auto driver_major_to_string = [this]()
+	{
+		std::string_view version = m_device->gpu().get_driver_version();
+		usz begin = 0;
+		while (begin < version.size() && !std::isdigit(static_cast<uchar>(version[begin])))
+		{
+			++begin;
+		}
+
+		usz end = begin;
+		while (end < version.size() && std::isdigit(static_cast<uchar>(version[end])))
+		{
+			++end;
+		}
+
+		if (end > begin)
+		{
+			return std::string(version.substr(begin, end - begin));
+		}
+
+		return std::string("unknown");
 	};
 
 	const std::string cache_platform_fields = rpcs3::cache::make_rsx_platform_fields("vulkan",
 	{
-		{"vendor_id", fmt::format("0x%x", m_device->gpu().get_vendor_id())},
-		{"device_id", fmt::format("0x%x", m_device->gpu().get_device_id())},
-		{"gpu", m_device->gpu().get_name()},
-		{"driver", m_device->gpu().get_driver_version()},
+		{"driver", driver_major_to_string()},
 		{"driver_vendor", driver_vendor_to_string(vk::get_driver_vendor())},
-		{"driver_family", chip_family_to_string()},
+		{"driver_family", driver_family_to_string()},
 	});
 	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "vulkan", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
 	rpcs3::cache::run_match_options run_match_options{};

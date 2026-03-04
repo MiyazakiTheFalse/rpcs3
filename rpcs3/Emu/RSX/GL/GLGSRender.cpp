@@ -139,13 +139,90 @@ void GLGSRender::on_init_thread()
 	const auto* const gl_vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
 	const auto* const gl_renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
 	const auto* const gl_version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+	const auto normalize_driver_vendor = [](std::string_view vendor, std::string_view version, std::string_view renderer)
+	{
+		const auto contains = [](std::string_view haystack, std::string_view needle)
+		{
+			return haystack.find(needle) != umax;
+		};
+
+		if (contains(version, "Mesa") || contains(renderer, "Mesa") || contains(renderer, "llvmpipe") || contains(renderer, "zink"))
+		{
+			return std::string("mesa");
+		}
+
+		if (contains(vendor, "NVIDIA")) return std::string("nvidia");
+		if (contains(vendor, "Intel")) return std::string("intel");
+		if (contains(vendor, "AMD") || contains(vendor, "ATI")) return std::string("amd");
+		if (contains(vendor, "Apple")) return std::string("apple");
+		if (contains(vendor, "Qualcomm")) return std::string("qualcomm");
+		if (contains(vendor, "Google")) return std::string("google");
+		return std::string("unknown");
+	};
+	const auto normalize_driver_family = [](std::string_view version, std::string_view renderer)
+	{
+		if (version.find("Mesa") != umax || renderer.find("Mesa") != umax)
+		{
+			if (renderer.find("RADV") != umax) return std::string("radv");
+			if (renderer.find("ANV") != umax) return std::string("anv");
+			if (renderer.find("NVK") != umax) return std::string("nvk");
+			if (renderer.find("zink") != umax) return std::string("zink");
+			if (renderer.find("llvmpipe") != umax) return std::string("llvmpipe");
+			return std::string("mesa");
+		}
+
+		if (renderer.find("SwiftShader") != umax) return std::string("swiftshader");
+		if (renderer.find("ANGLE") != umax) return std::string("angle");
+		return std::string("native");
+	};
+	const auto normalize_driver_major = [](std::string_view version)
+	{
+		auto take_first_number_after = [&](std::string_view marker) -> std::string
+		{
+			usz start = marker.empty() ? 0 : version.find(marker);
+			if (start == umax)
+			{
+				return {};
+			}
+
+			start += marker.size();
+			while (start < version.size() && !std::isdigit(static_cast<uchar>(version[start])))
+			{
+				++start;
+			}
+
+			usz end = start;
+			while (end < version.size() && std::isdigit(static_cast<uchar>(version[end])))
+			{
+				++end;
+			}
+
+			return end > start ? std::string(version.substr(start, end - start)) : std::string{};
+		};
+
+		for (const std::string_view marker : { std::string_view("Mesa"), std::string_view("NVIDIA") })
+		{
+			if (const std::string major = take_first_number_after(marker); !major.empty())
+			{
+				return major;
+			}
+		}
+
+		if (const std::string major = take_first_number_after({}); !major.empty())
+		{
+			return major;
+		}
+
+		return std::string("unknown");
+	};
+	const std::string_view vendor = gl_vendor ? gl_vendor : "unknown";
+	const std::string_view renderer = gl_renderer ? gl_renderer : "unknown";
+	const std::string_view version = gl_version ? gl_version : "unknown";
 	const std::string cache_platform_fields = rpcs3::cache::make_rsx_platform_fields("opengl",
 	{
-		{"vendor", gl_vendor ? gl_vendor : "unknown"},
-		{"device", gl_renderer ? gl_renderer : "unknown"},
-		{"driver", gl_version ? gl_version : "unknown"},
-		{"driver_vendor", gl_vendor ? gl_vendor : "unknown"},
-		{"driver_family", gl_renderer ? gl_renderer : "unknown"},
+		{"driver", normalize_driver_major(version)},
+		{"driver_vendor", normalize_driver_vendor(vendor, version, renderer)},
+		{"driver_family", normalize_driver_family(version, renderer)},
 	});
 	const std::string settings_fingerprint = rpcs3::cache::make_compatibility_tuple("rsx", "opengl", cache_platform_fields) + "|ns=" + rsx::get_pipeline_cache_namespace();
 	rpcs3::cache::run_match_options run_match_options{};

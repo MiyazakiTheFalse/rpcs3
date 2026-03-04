@@ -60,8 +60,10 @@ Writers must record the intended artifact placement policy (`tier`) and the effe
 - RSX now passes explicit platform fields for shader/pipeline reuse checks via `make_rsx_platform_fields(...)`:
   - `os=<platform fingerprint from get_platform_cache_id()>`
   - `renderer=<opengl|vulkan>`
-  - OpenGL: `vendor=<GL_VENDOR>`, `device=<GL_RENDERER>`, `driver=<GL_VERSION>`
-  - Vulkan: `vendor_id=<VkPhysicalDeviceProperties::vendorID>`, `device_id=<...::deviceID>`, `gpu=<deviceName>`, `driver=<decoded Vulkan driver version>`
+  - OpenGL and Vulkan now use the same normalized identity payload for compatibility matching:
+    - `driver_vendor=<normalized vendor token>`
+    - `driver_family=<normalized driver/GPU family token>`
+    - `driver=<major driver version bucket>`
 - Pipeline data embeds a compatibility hash computed from the tuple to gate pipeline binary reuse.
 
 ## Platform/driver-sensitive fields
@@ -73,7 +75,9 @@ Writers must record the intended artifact placement policy (`tier`) and the effe
 - RSX platform field formatting is deterministic:
   - Ordered `key=value` pairs joined by `;`
   - RSX tuple generation appends `os=...` then `renderer=...` in a fixed order after backend-specific fields.
-- RSX explicitly includes backend-specific driver identity fields so cached pipelines are invalidated across materially different driver/GPU stacks.
+- RSX explicitly includes backend-specific semantic driver identity fields so cached pipelines are invalidated across materially different driver/GPU stacks without using high-entropy raw identifiers.
+- Raw runtime identifiers such as full `GL_VERSION`, Vulkan `deviceName`, or PCI IDs are intentionally not included in `platform=` fingerprint fields to reduce cache/run fragmentation from cosmetic or overly specific drift.
+- This keeps reuse safe (vendor/family/major driver gates remain) while allowing cache sharing across minor driver updates and string formatting differences.
 
 ## Artifact serialization versions
 
