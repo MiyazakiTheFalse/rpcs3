@@ -5140,10 +5140,12 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 			sha1_finish(&ctx, output);
 
-			// Settings: all codegen-affecting g_cfg.core toggles must be represented here
+			// Cache key traits used in serialized object names.
+			// Codegen settings section: all codegen-affecting g_cfg.core toggles must be represented here
 			// (or intentionally documented if handled elsewhere, e.g. CPU string/version tag).
-			enum class ppu_settings : u32
+			enum class ppu_cache_key_traits : u32
 			{
+				// Codegen settings and platform/compiler behavior.
 				platform_bit,
 				accurate_dfma,
 				fixup_vnan,
@@ -5156,43 +5158,45 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				accurate_fpcc,
 				accurate_vnan,
 				accurate_nj_mode,
+
+				// Non-setting cache-layout discriminator.
 				contains_symbol_resolver,
 
 				__bitset_enum_max
 			};
 
-			be_t<bs_t<ppu_settings>> settings{};
+			be_t<bs_t<ppu_cache_key_traits>> cache_key_traits{};
 
 #if !defined(_WIN32) && !defined(__APPLE__)
-			settings += ppu_settings::platform_bit;
+			cache_key_traits += ppu_cache_key_traits::platform_bit;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
-				settings += ppu_settings::accurate_dfma;
+				cache_key_traits += ppu_cache_key_traits::accurate_dfma;
 			if (g_cfg.core.ppu_fix_vnan)
-				settings += ppu_settings::fixup_vnan;
+				cache_key_traits += ppu_cache_key_traits::fixup_vnan;
 			if (g_cfg.core.ppu_llvm_nj_fixup)
-				settings += ppu_settings::fixup_nj_denormals;
+				cache_key_traits += ppu_cache_key_traits::fixup_nj_denormals;
 			if (has_dcbz == 2)
-				settings += ppu_settings::accurate_cache_line_stores;
+				cache_key_traits += ppu_cache_key_traits::accurate_cache_line_stores;
 			if (g_cfg.core.ppu_128_reservations_loop_max_length)
-				settings += ppu_settings::reservations_128_byte;
+				cache_key_traits += ppu_cache_key_traits::reservations_128_byte;
 			if (g_cfg.core.ppu_llvm_greedy_mode)
-				settings += ppu_settings::greedy_mode;
+				cache_key_traits += ppu_cache_key_traits::greedy_mode;
 			if (g_cfg.core.ppu_prof)
-				settings += ppu_settings::profiler_instrumentation;
+				cache_key_traits += ppu_cache_key_traits::profiler_instrumentation;
 			if (has_mfvscr && g_cfg.core.ppu_set_sat_bit)
-				settings += ppu_settings::accurate_sat;
+				cache_key_traits += ppu_cache_key_traits::accurate_sat;
 			if (g_cfg.core.ppu_set_fpcc)
-				settings += ppu_settings::accurate_fpcc, fmt::throw_exception("FPCC Not implemented");
+				cache_key_traits += ppu_cache_key_traits::accurate_fpcc, fmt::throw_exception("FPCC Not implemented");
 			if (g_cfg.core.ppu_set_vnan)
-				settings += ppu_settings::accurate_vnan, settings -= ppu_settings::fixup_vnan, fmt::throw_exception("VNAN Not implemented");
+				cache_key_traits += ppu_cache_key_traits::accurate_vnan, cache_key_traits -= ppu_cache_key_traits::fixup_vnan, fmt::throw_exception("VNAN Not implemented");
 			if (g_cfg.core.ppu_use_nj_bit)
-				settings += ppu_settings::accurate_nj_mode, settings -= ppu_settings::fixup_nj_denormals, fmt::throw_exception("NJ Not implemented");
+				cache_key_traits += ppu_cache_key_traits::accurate_nj_mode, cache_key_traits -= ppu_cache_key_traits::fixup_nj_denormals, fmt::throw_exception("NJ Not implemented");
 			if (fpos >= info.get_funcs().size() || module_counter % c_moudles_per_jit == c_moudles_per_jit - 1)
-				settings += ppu_settings::contains_symbol_resolver; // Avoid invalidating all modules for this purpose
+				cache_key_traits += ppu_cache_key_traits::contains_symbol_resolver; // Avoid invalidating all modules for this purpose
 
-			// Write version, hash, CPU, settings
-			fmt::append(obj_name, "%s-%s-%s-%s.obj", s_ppu_obj_name_version, fmt::base57(output, 16), fmt::base57(settings), jit_compiler::cpu(g_cfg.core.llvm_cpu));
+			// Write version, hash, cache key traits, CPU
+			fmt::append(obj_name, "%s-%s-%s-%s.obj", s_ppu_obj_name_version, fmt::base57(output, 16), fmt::base57(cache_key_traits), jit_compiler::cpu(g_cfg.core.llvm_cpu));
 		}
 
 		if (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped())
