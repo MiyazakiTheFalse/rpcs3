@@ -5140,7 +5140,8 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 			sha1_finish(&ctx, output);
 
-			// Settings: should be populated by settings which affect codegen (TODO)
+			// Settings: all codegen-affecting g_cfg.core toggles must be represented here
+			// (or intentionally documented if handled elsewhere, e.g. CPU string/version tag).
 			enum class ppu_settings : u32
 			{
 				platform_bit,
@@ -5150,6 +5151,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				accurate_cache_line_stores,
 				reservations_128_byte,
 				greedy_mode,
+				profiler_instrumentation,
 				accurate_sat,
 				accurate_fpcc,
 				accurate_vnan,
@@ -5176,6 +5178,8 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				settings += ppu_settings::reservations_128_byte;
 			if (g_cfg.core.ppu_llvm_greedy_mode)
 				settings += ppu_settings::greedy_mode;
+			if (g_cfg.core.ppu_prof)
+				settings += ppu_settings::profiler_instrumentation;
 			if (has_mfvscr && g_cfg.core.ppu_set_sat_bit)
 				settings += ppu_settings::accurate_sat;
 			if (g_cfg.core.ppu_set_fpcc)
